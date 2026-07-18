@@ -10,10 +10,20 @@ static const int MODEM_RESET_PIN = 5;
 
 HardwareSerial SerialAT(1);
 
+void pulsePowerKey(uint32_t pulseMs)
+{
+  digitalWrite(MODEM_PWRKEY_PIN, LOW);
+  delay(100);
+  digitalWrite(MODEM_PWRKEY_PIN, HIGH);
+  delay(pulseMs);
+  digitalWrite(MODEM_PWRKEY_PIN, LOW);
+}
+
 void powerOnModem()
 {
   pinMode(BOARD_POWERON_PIN, OUTPUT);
   digitalWrite(BOARD_POWERON_PIN, HIGH);
+  delay(500);
 
   pinMode(MODEM_RESET_PIN, OUTPUT);
   digitalWrite(MODEM_RESET_PIN, LOW);
@@ -26,12 +36,40 @@ void powerOnModem()
   digitalWrite(MODEM_DTR_PIN, LOW);
 
   pinMode(MODEM_PWRKEY_PIN, OUTPUT);
-  digitalWrite(MODEM_PWRKEY_PIN, LOW);
-  delay(100);
-  digitalWrite(MODEM_PWRKEY_PIN, HIGH);
-  delay(100);
-  digitalWrite(MODEM_PWRKEY_PIN, LOW);
-  delay(3000);
+  pulsePowerKey(100);
+}
+
+bool modemRespondsAt(uint32_t baud)
+{
+  SerialAT.updateBaudRate(baud);
+  while (SerialAT.available()) SerialAT.read();
+
+  for (int attempt = 0; attempt < 3; attempt++) {
+    SerialAT.print("AT\r\n");
+    uint32_t deadline = millis() + 1000;
+    String response;
+    while (static_cast<int32_t>(deadline - millis()) > 0) {
+      while (SerialAT.available()) response += static_cast<char>(SerialAT.read());
+      if (response.indexOf("OK") >= 0) {
+        Serial.printf("Modem responded at %lu baud: %s\n", baud, response.c_str());
+        return true;
+      }
+      delay(1);
+    }
+  }
+  return false;
+}
+
+uint32_t findModemBaud()
+{
+  static const uint32_t rates[] = {
+    115200, 9600, 57600, 38400, 19200, 74880, 230400, 460800
+  };
+  for (uint32_t rate : rates) {
+    Serial.printf("Trying modem UART at %lu baud...\n", rate);
+    if (modemRespondsAt(rate)) return rate;
+  }
+  return 0;
 }
 
 void sendAndPrint(const char *command, uint32_t waitMs = 1500)
@@ -58,6 +96,23 @@ void setup()
   Serial.println("Powering modem; red modem LEDs should activate...");
   powerOnModem();
 
+  Serial.println("Waiting 15 seconds for the modem to boot...");
+  delay(15000);
+  uint32_t modemBaud = findModemBaud();
+
+  if (modemBaud == 0) {
+    Serial.println("No AT response. Retrying PWRKEY with a 1-second pulse...");
+    pulsePowerKey(1000);
+    delay(15000);
+    modemBaud = findModemBaud();
+  }
+
+  if (modemBaud == 0) {
+    Serial.println("MODEM TEST FAILED: no response at any tested baud rate.");
+    Serial.println("Report whether the red modem LEDs are on or completely off.");
+    return;
+  }
+
   sendAndPrint("AT");
   sendAndPrint("AT+SIMCOMATI", 2500);
   sendAndPrint("AT+CPIN?");
@@ -68,6 +123,10 @@ void setup()
 
 void loop()
 {
-  while (Serial.available()) SerialAT.write(Serial.read());
+  while (Serial.available()) {
+    int value = Serial.read();
+    Serial.write(value);  // Local echo so sent commands are visible.
+    SerialAT.write(value);
+  }
   while (SerialAT.available()) Serial.write(SerialAT.read());
 }
