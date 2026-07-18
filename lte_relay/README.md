@@ -14,6 +14,13 @@ complete source of truth; this relay intentionally has no persistent buffer.
 The ESP-NOW hop is wireless. Do not connect UART wires between the logger and
 relay. Power both boards normally and keep them within radio range.
 
+## Modem communication smoke test
+
+Before installing LTE libraries or inserting a SIM, flash
+`a7670_at_test/a7670_at_test.ino`. Open Serial Monitor at 115200 baud. The
+automatic test should return `OK` for `AT` and print the exact modem identity
+for `AT+SIMCOMATI`. The monitor then remains as a direct AT-command terminal.
+
 ## Arduino setup
 
 Install:
