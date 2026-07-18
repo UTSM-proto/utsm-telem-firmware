@@ -36,7 +36,8 @@ void powerOnModem()
   digitalWrite(MODEM_DTR_PIN, LOW);
 
   pinMode(MODEM_PWRKEY_PIN, OUTPUT);
-  pulsePowerKey(100);
+  // The tested T-A7670X R2 hardware requires a 1-second PWRKEY pulse.
+  pulsePowerKey(1000);
 }
 
 bool modemRespondsAt(uint32_t baud)
@@ -101,7 +102,7 @@ void setup()
   uint32_t modemBaud = findModemBaud();
 
   if (modemBaud == 0) {
-    Serial.println("No AT response. Retrying PWRKEY with a 1-second pulse...");
+    Serial.println("No AT response. Retrying the 1-second PWRKEY pulse...");
     pulsePowerKey(1000);
     delay(15000);
     modemBaud = findModemBaud();

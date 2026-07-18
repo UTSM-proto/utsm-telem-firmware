@@ -23,7 +23,9 @@ static const int MODEM_RX_PIN = 27;
 static const int MODEM_TX_PIN = 26;
 static const int MODEM_PWRKEY_PIN = 4;
 static const int MODEM_RESET_PIN = 5;
-static const uint32_t MODEM_POWER_ON_PULSE_MS = 100;
+// The tested T-A7670X R2 hardware did not start with the generic 100 ms pulse.
+// A 1-second pulse reliably starts the modem on this board revision.
+static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
 static const uint32_t MODEM_START_WAIT_MS = 3000;
 
 HardwareSerial SerialAT(1);
