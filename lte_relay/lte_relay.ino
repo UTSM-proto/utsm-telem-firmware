@@ -1,4 +1,4 @@
-#define TINY_GSM_MODEM_SIM7600
+#define TINY_GSM_MODEM_A7670
 #define TINY_GSM_RX_BUFFER 1024
 
 #include <Arduino.h>
@@ -16,15 +16,15 @@
 #include "relay_config.example.h"
 #endif
 
-// Official LilyGO T-SIM7600X ESP32 (WROVER) pin map.
-static const int MODEM_DTR_PIN = 32;
-static const int MODEM_RX_PIN = 26;
-static const int MODEM_TX_PIN = 27;
-static const int MODEM_FLIGHT_PIN = 25;
-static const int MODEM_STATUS_PIN = 34;
+// Official LilyGO T-A7670X ESP32-WROVER-E pin map.
+static const int BOARD_POWERON_PIN = 12;
+static const int MODEM_DTR_PIN = 25;
+static const int MODEM_RX_PIN = 27;
+static const int MODEM_TX_PIN = 26;
 static const int MODEM_PWRKEY_PIN = 4;
-static const uint32_t MODEM_POWER_ON_PULSE_MS = 500;
-static const uint32_t MODEM_START_WAIT_MS = 15000;
+static const int MODEM_RESET_PIN = 5;
+static const uint32_t MODEM_POWER_ON_PULSE_MS = 100;
+static const uint32_t MODEM_START_WAIT_MS = 3000;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
@@ -87,8 +87,17 @@ bool dequeuePacket(LiveTelemetryPacket &packet)
 
 void powerOnModem()
 {
-  pinMode(MODEM_FLIGHT_PIN, OUTPUT);
-  digitalWrite(MODEM_FLIGHT_PIN, HIGH);
+  // GPIO 12 enables power to the modem and SD peripherals on T-A7670X.
+  pinMode(BOARD_POWERON_PIN, OUTPUT);
+  digitalWrite(BOARD_POWERON_PIN, HIGH);
+
+  // Follow LilyGO's A7670X reset sequence (active HIGH reset).
+  pinMode(MODEM_RESET_PIN, OUTPUT);
+  digitalWrite(MODEM_RESET_PIN, LOW);
+  delay(100);
+  digitalWrite(MODEM_RESET_PIN, HIGH);
+  delay(2600);
+  digitalWrite(MODEM_RESET_PIN, LOW);
 
   pinMode(MODEM_DTR_PIN, OUTPUT);
   digitalWrite(MODEM_DTR_PIN, LOW);
@@ -104,9 +113,9 @@ void powerOnModem()
 
 bool connectLte()
 {
-  Serial.println("Initializing SIM7600...");
+  Serial.println("Initializing A7670X...");
   if (!modem.init()) {
-    Serial.println("SIM7600 did not answer AT commands");
+    Serial.println("A7670X did not answer AT commands");
     return false;
   }
 
@@ -279,7 +288,7 @@ void setup()
 {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("UTSM T-SIM7600G live telemetry relay");
+  Serial.println("UTSM T-A7670X live telemetry relay");
   Serial.println(LTE_DUMMY_TEST_MODE
     ? "Mode: LEVEL 2 LTE DUMMY TEST (ESP-NOW input ignored)"
     : "Mode: LIVE ESP-NOW RELAY");

@@ -1,4 +1,4 @@
-# T-SIM7600G LTE relay
+# T-A7670X LTE relay
 
 This sketch receives the existing telemetry record over ESP-NOW and posts it
 to the software dashboard over LTE. SD logging on the ESP32-C3 remains the
@@ -6,7 +6,7 @@ complete source of truth; this relay intentionally has no persistent buffer.
 
 ## Hardware
 
-- LILYGO/TTGO T-SIM7600G ESP32-WROVER board
+- LILYGO T-A7670E/G/SA ESP32-WROVER-E board
 - LTE main antenna attached before powering the modem
 - Activated nano-SIM with data service
 - Stable USB/5 V supply capable of modem current peaks (use at least 2 A)
@@ -19,7 +19,8 @@ relay. Power both boards normally and keep them within radio range.
 Install:
 
 - Espressif `esp32` board package
-- `TinyGSM` by Volodymyr Shymanskyy
+- LilyGO's bundled `TinyGSM` fork from the `lib` folder in
+  [LilyGo-Modem-Series](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series)
 
 Select an ESP32 WROVER-compatible board and enable PSRAM if that board profile
 offers the option.
@@ -28,7 +29,7 @@ Copy `relay_config.example.h` to `relay_config.h`, then set the carrier APN,
 the full dashboard ingestion URL, and the same API key used by the server.
 
 For a first SIM test, disable the SIM PIN in a phone, confirm mobile data works,
-then move the powered-off SIM into the T-SIM7600G. A normal phone SIM usually
+then move the powered-off SIM into the T-A7670X. A normal phone SIM usually
 works when the carrier permits modem/tethered data and the APN is correct.
 
 ## Prototype behavior
@@ -43,7 +44,7 @@ works when the carrier permits modem/tethered data and the APN is correct.
 
 ## Level 2: LTE-only dummy test
 
-This test uses only the T-SIM7600G and verifies SIM registration, LTE data,
+This test uses only the T-A7670X and verifies SIM registration, LTE data,
 HTTPS ingestion, WebSocket updates, gauges, charts, table, and map. The main
 ESP32-C3 telemetry board is not required.
 
