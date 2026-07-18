@@ -40,3 +40,17 @@ works when the carrier permits modem/tethered data and the APN is correct.
   sample rate. Change `LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS` if required.
 - GPS fields are already part of packet version 1. The map activates when a
   future logger integration passes valid `latitude_e7` and `longitude_e7`.
+
+## Level 2: LTE-only dummy test
+
+This test uses only the T-SIM7600G and verifies SIM registration, LTE data,
+HTTPS ingestion, WebSocket updates, gauges, charts, table, and map. The main
+ESP32-C3 telemetry board is not required.
+
+1. Copy `relay_config.example.h` to `relay_config.h`.
+2. Set the carrier APN, public dashboard endpoint, and matching API key.
+3. Set `LTE_DUMMY_TEST_MODE = true`.
+4. Flash `lte_relay.ino` and open the serial monitor at 115200 baud.
+5. Expect `Mode: LEVEL 2 LTE DUMMY TEST`, an assigned LTE IP, HTTP status 202,
+   and repeating `DUMMY seq=N delivered` messages.
+6. Return `LTE_DUMMY_TEST_MODE` to `false` before the ESP-NOW integration test.

@@ -231,11 +231,58 @@ String packetToJson(const LiveTelemetryPacket &packet)
   return json;
 }
 
+LiveTelemetryPacket makeDummyPacket()
+{
+  static uint32_t dummyBootId = esp_random();
+  static uint32_t dummySequence = 0;
+
+  float phase = static_cast<float>(dummySequence % 40) / 40.0f * 2.0f * PI;
+  LiveTelemetryPacket packet = {};
+  packet.magic = LIVE_TELEMETRY_MAGIC;
+  packet.version = LIVE_TELEMETRY_VERSION;
+  packet.flags = LTE_DUMMY_INCLUDE_GPS ? LIVE_TELEMETRY_FLAG_GPS_VALID : 0;
+  packet.packet_size = sizeof(packet);
+  packet.boot_id = dummyBootId;
+  packet.sequence = dummySequence++;
+  packet.timestamp_ms = millis();
+  packet.current_mA = static_cast<int16_t>(7000.0f + 2500.0f * sinf(phase));
+  packet.voltage_mV = 24000 - packet.current_mA / 20;
+  packet.ax_x100 = static_cast<int16_t>(80.0f * sinf(phase * 1.7f));
+  packet.ay_x100 = static_cast<int16_t>(55.0f * cosf(phase * 1.3f));
+  packet.az_x100 = 981;
+  packet.amag_x100 = static_cast<uint16_t>(985.0f + 20.0f * sinf(phase));
+
+  // Small fake loop near Indianapolis so the Level 2 test exercises the map.
+  packet.latitude_e7 = 397991700 + static_cast<int32_t>(4500.0f * sinf(phase));
+  packet.longitude_e7 = -862380100 + static_cast<int32_t>(6000.0f * cosf(phase));
+  return packet;
+}
+
+bool sendLivePacket(const LiveTelemetryPacket &packet, const char *sourceLabel)
+{
+  String json = packetToJson(packet);
+  if (postJson(json)) {
+    Serial.printf("%s seq=%lu delivered\n",
+                  sourceLabel,
+                  static_cast<unsigned long>(packet.sequence));
+    return true;
+  }
+
+  Serial.printf("%s seq=%lu POST failed\n",
+                sourceLabel,
+                static_cast<unsigned long>(packet.sequence));
+  networkReady = false;
+  return false;
+}
+
 void setup()
 {
   Serial.begin(115200);
   delay(1000);
   Serial.println("UTSM T-SIM7600G live telemetry relay");
+  Serial.println(LTE_DUMMY_TEST_MODE
+    ? "Mode: LEVEL 2 LTE DUMMY TEST (ESP-NOW input ignored)"
+    : "Mode: LIVE ESP-NOW RELAY");
 
   WiFi.mode(WIFI_STA);
   Serial.print("Relay ESP-NOW MAC: ");
@@ -254,12 +301,23 @@ void setup()
 
 void loop()
 {
-  if (!networkReady || !modem.isGprsConnected()) {
-    networkReady = false;
+  if (!networkReady) {
     if (millis() - lastNetworkAttemptMs >= 10000) {
       lastNetworkAttemptMs = millis();
       networkReady = connectLte();
     }
+  }
+
+  if (LTE_DUMMY_TEST_MODE) {
+    static uint32_t lastDummySendMs = 0;
+    uint32_t now = millis();
+    if (networkReady && now - lastDummySendMs >= LTE_DUMMY_SEND_INTERVAL_MS) {
+      lastDummySendMs = now;
+      LiveTelemetryPacket dummy = makeDummyPacket();
+      sendLivePacket(dummy, "DUMMY");
+    }
+    delay(5);
+    return;
   }
 
   LiveTelemetryPacket packet;
@@ -274,12 +332,7 @@ void loop()
     return;
   }
 
-  String json = packetToJson(packet);
-  if (!postJson(json)) {
-    Serial.printf("Live POST failed; seq=%lu dropped (SD copy remains on logger)\n",
-                  static_cast<unsigned long>(packet.sequence));
-    networkReady = modem.isGprsConnected();
-  }
+  sendLivePacket(packet, "LIVE");
 
   static uint32_t lastDropReport = 0;
   if (droppedPackets != lastDropReport) {
