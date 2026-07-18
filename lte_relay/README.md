@@ -62,3 +62,21 @@ ESP32-C3 telemetry board is not required.
 5. Expect `Mode: LEVEL 2 LTE DUMMY TEST`, an assigned LTE IP, HTTP status 202,
    and repeating `DUMMY seq=N delivered` messages.
 6. Return `LTE_DUMMY_TEST_MODE` to `false` before the ESP-NOW integration test.
+
+## Level 3: full-path ESP-NOW dummy test
+
+This proves `ESP32-C3 telemetry board -> ESP-NOW -> A7670X relay -> LTE -> dashboard`
+without requiring live sensors.
+
+1. Set `LTE_DUMMY_TEST_MODE = false` in the relay's ignored `relay_config.h`.
+2. Flash `lte_relay/lte_relay.ino` to the T-A7670X and leave it powered.
+3. Flash `telem-v1/espnow_dummy_sender/espnow_dummy_sender.ino` to the ESP32-C3
+   SuperMini.
+4. Open both serial monitors at 115200 if two USB ports are available.
+5. The C3 prints `C3 ESP-NOW queued seq=N`; the relay prints
+   `LIVE seq=N delivered`; the dashboard updates with the same sequence.
+
+Both boards are explicitly pinned to ESP-NOW channel 1 for this demo. The
+canonical telemetry logger uses the same sender channel and packet layout, so
+returning from dummy data to real data only requires flashing
+`telem-v1/telemetry_gpio1_led_sd_per_session.ino` back onto the C3.

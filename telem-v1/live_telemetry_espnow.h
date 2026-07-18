@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <esp_system.h>
 
 #include "live_telemetry_packet.h"
@@ -16,6 +17,7 @@ static const uint8_t LIVE_TELEMETRY_BROADCAST_MAC[6] = {
 // LTE round trips are much slower than the logger sample loop. SD retains every
 // sample; the live view gets a configurable 1 Hz mirror by default.
 static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 1000;
+static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 
 class LiveTelemetryEspNowSender
 {
@@ -23,6 +25,8 @@ public:
   bool begin()
   {
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    esp_wifi_set_channel(LIVE_TELEMETRY_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     Serial.print("ESP-NOW sender MAC: ");
     Serial.println(WiFi.macAddress());
 
@@ -33,7 +37,7 @@ public:
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, LIVE_TELEMETRY_BROADCAST_MAC, sizeof(peer.peer_addr));
-    peer.channel = 0;
+    peer.channel = LIVE_TELEMETRY_ESPNOW_CHANNEL;
     peer.encrypt = false;
 
     esp_err_t result = esp_now_add_peer(&peer);
@@ -44,7 +48,8 @@ public:
 
     _bootId = esp_random();
     _ready = true;
-    Serial.println("ESP-NOW live telemetry ready (broadcast, 1 Hz)");
+    Serial.printf("ESP-NOW live telemetry ready (broadcast, channel %u, 1 Hz)\n",
+                  LIVE_TELEMETRY_ESPNOW_CHANNEL);
     return true;
   }
 

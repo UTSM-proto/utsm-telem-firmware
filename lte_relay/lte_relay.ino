@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <esp_arduino_version.h>
 #include <TinyGsmClient.h>
 
@@ -27,6 +28,7 @@ static const int MODEM_RESET_PIN = 5;
 // A 1-second pulse reliably starts the modem on this board revision.
 static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
 static const uint32_t MODEM_START_WAIT_MS = 15000;
+static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
@@ -333,8 +335,11 @@ void setup()
     : "Mode: LIVE ESP-NOW RELAY");
 
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  esp_wifi_set_channel(LIVE_TELEMETRY_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   Serial.print("Relay ESP-NOW MAC: ");
   Serial.println(WiFi.macAddress());
+  Serial.printf("Relay ESP-NOW channel: %u\n", LIVE_TELEMETRY_ESPNOW_CHANNEL);
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
     while (true) delay(1000);
