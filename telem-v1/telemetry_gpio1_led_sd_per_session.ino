@@ -8,6 +8,8 @@ struct TelemetryRecord_t;
 #include "SD.h"
 #include "SPI.h"
 
+#include "live_telemetry_espnow.h"
+
 // =========================
 // Pin mapping (ESP32-C3 Super Mini)
 // =========================
@@ -104,6 +106,7 @@ char g_sdLogFile[32] = "/telemetry_001.csv";
 uint16_t g_sdLogIndex = 0;
 
 bool g_sdReady = false;
+LiveTelemetryEspNowSender g_liveTelemetry;
 
 uint32_t lastButtonHandledMs = 0;
 
@@ -629,6 +632,9 @@ void setup()
   Serial.println();
   Serial.println("ESP32-C3 Telemetry Logger");
 
+  // Live transport is best-effort and never blocks SD logging startup.
+  g_liveTelemetry.begin();
+
   g_sdReady = initSDCard();
 
   if (!g_sdReady) {
@@ -769,6 +775,18 @@ void loop()
   } else {
     Serial.println("SD write failed");
   }
+
+  // Mirror a throttled subset of the exact SD record. A future consolidated
+  // GPS sketch can pass gpsValid/latitudeE7/longitudeE7 to this same function.
+  g_liveTelemetry.send(
+    rec.timestamp_ms,
+    rec.current_mA,
+    rec.voltage_mV,
+    rec.accel_x_mps2_x100,
+    rec.accel_y_mps2_x100,
+    rec.accel_z_mps2_x100,
+    rec.accel_mag_mps2_x100
+  );
 
   delay(20);
 }
