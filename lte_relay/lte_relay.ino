@@ -165,13 +165,11 @@ int parseHttpStatus(const String &actionLine)
 
 bool postJson(const String &json)
 {
-  bool useTls = String(TELEMETRY_ENDPOINT).startsWith("https://");
-
   // Clear a stale service from a previous failed request.
   atCommand("+HTTPTERM", 2000);
   if (!atCommand("+HTTPINIT")) return false;
-  if (!atCommand("+HTTPPARA=\"CID\",1")) return false;
-  if (!atCommand(String("+HTTPSSL=") + (useTls ? "1" : "0"))) return false;
+  // A7670X selects HTTP versus HTTPS from the URL. HTTPSSL and the
+  // HTTPPARA="CID" form are SIM7600-specific and return ERROR here.
   if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) return false;
   if (!atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"")) return false;
   if (!atCommand(String("+HTTPPARA=\"USERDATA\",\"X-Telemetry-Key: ") +
