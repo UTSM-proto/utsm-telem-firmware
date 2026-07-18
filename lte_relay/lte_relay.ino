@@ -26,7 +26,7 @@ static const int MODEM_RESET_PIN = 5;
 // The tested T-A7670X R2 hardware did not start with the generic 100 ms pulse.
 // A 1-second pulse reliably starts the modem on this board revision.
 static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
-static const uint32_t MODEM_START_WAIT_MS = 3000;
+static const uint32_t MODEM_START_WAIT_MS = 15000;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
@@ -87,18 +87,37 @@ bool dequeuePacket(LiveTelemetryPacket &packet)
   return available;
 }
 
-void powerOnModem()
+bool probeModemAt(uint32_t timeoutMs)
+{
+  while (SerialAT.available()) SerialAT.read();
+  uint32_t deadline = millis() + timeoutMs;
+  uint32_t nextAttempt = 0;
+  String response;
+
+  while (static_cast<int32_t>(deadline - millis()) > 0) {
+    if (static_cast<int32_t>(millis() - nextAttempt) >= 0) {
+      SerialAT.print("AT\r\n");
+      nextAttempt = millis() + 500;
+    }
+    while (SerialAT.available()) {
+      response += static_cast<char>(SerialAT.read());
+      if (response.indexOf("OK") >= 0) return true;
+      if (response.length() > 128) response.remove(0, 64);
+    }
+    delay(1);
+  }
+  return false;
+}
+
+bool powerOnModem()
 {
   // GPIO 12 enables power to the modem and SD peripherals on T-A7670X.
   pinMode(BOARD_POWERON_PIN, OUTPUT);
   digitalWrite(BOARD_POWERON_PIN, HIGH);
 
-  // Follow LilyGO's A7670X reset sequence (active HIGH reset).
+  // Keep reset inactive. Uploading a new ESP32 sketch does not necessarily
+  // power-cycle the modem, so first check whether it is already running.
   pinMode(MODEM_RESET_PIN, OUTPUT);
-  digitalWrite(MODEM_RESET_PIN, LOW);
-  delay(100);
-  digitalWrite(MODEM_RESET_PIN, HIGH);
-  delay(2600);
   digitalWrite(MODEM_RESET_PIN, LOW);
 
   pinMode(MODEM_DTR_PIN, OUTPUT);
@@ -106,18 +125,38 @@ void powerOnModem()
 
   pinMode(MODEM_PWRKEY_PIN, OUTPUT);
   digitalWrite(MODEM_PWRKEY_PIN, LOW);
+  delay(3000);
+
+  if (probeModemAt(3000)) {
+    Serial.println("A7670X was already powered on");
+    return true;
+  }
+
+  Serial.println("A7670X is off; applying 1-second PWRKEY pulse...");
   delay(100);
   digitalWrite(MODEM_PWRKEY_PIN, HIGH);
   delay(MODEM_POWER_ON_PULSE_MS);
   digitalWrite(MODEM_PWRKEY_PIN, LOW);
   delay(MODEM_START_WAIT_MS);
+
+  if (probeModemAt(5000)) {
+    Serial.println("A7670X powered on and answered AT");
+    return true;
+  }
+
+  Serial.println("A7670X did not answer after PWRKEY startup");
+  return false;
 }
 
 bool connectLte()
 {
   Serial.println("Initializing A7670X...");
+  if (!probeModemAt(3000)) {
+    Serial.println("A7670X is not answering AT commands");
+    return false;
+  }
   if (!modem.init()) {
-    Serial.println("A7670X did not answer AT commands");
+    Serial.println("A7670X answered AT, but TinyGSM initialization failed");
     return false;
   }
 
@@ -303,8 +342,8 @@ void setup()
   esp_now_register_recv_cb(onEspNowReceive);
 
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
-  powerOnModem();
-  networkReady = connectLte();
+  bool modemReady = powerOnModem();
+  networkReady = modemReady && connectLte();
   lastNetworkAttemptMs = millis();
 }
 
