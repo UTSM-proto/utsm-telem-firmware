@@ -1,13 +1,18 @@
-from pathlib import Path
-
 /*
   ESP32-C3 Vehicle Telemetry Logger
   ---------------------------------
+  Arduino setup/dependencies:
+    - Board target: ESP32C3 Dev Module (esp32:esp32:esp32c3)
+    - Install "esp32 by Espressif Systems" in Boards Manager
+    - Install "TinyGPSPlus by Mikal Hart" in Library Manager
+    - Wire, LittleFS, FS, SD, and SPI are included with the ESP32 board core
+
   Collects:
     - Current from ADS1115 AIN0
     - Voltage from ADS1115 AIN1
     - Thermistor temperature from ADS1115 AIN2
     - Acceleration from MPU6050
+    - Wheel speed from a beam-break sensor and 12 wheel spokes
     - GPS position, speed, altitude, HDOP, satellites, and UTC time
   Writes each recording session to an SD-card CSV.
 
@@ -21,6 +26,7 @@ from pathlib import Path
     I2C SCL       GPIO9
     Start/stop    GPIO0, active LOW
     Status LED    GPIO1
+    Speedometer   GPIO3 (LM393 digital output)
     SD SCK        GPIO4
     SD MISO       GPIO5
     SD MOSI       GPIO6
@@ -29,6 +35,7 @@ from pathlib import Path
     GPS TX        GPIO21 (connect to GPS RX)
 */
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <LittleFS.h>
 #include <math.h>
@@ -45,6 +52,7 @@ static const int PIN_I2C_SDA = 8;
 static const int PIN_I2C_SCL = 9;
 static const int BUTTON_PIN  = 0;
 static const int LED_PIN     = 1;
+static const int SPEED_SENSOR_PIN = 3;
 
 static const int SD_CS   = 7;
 static const int SD_MOSI = 6;
@@ -54,6 +62,28 @@ static const int SD_SCK  = 4;
 static const int GPS_RX_PIN = 20;
 static const int GPS_TX_PIN = 21;
 static const uint32_t GPS_BAUD = 9600;
+
+// =========================
+// Beam-break speedometer
+// =========================
+// Each spoke creates one rising edge. The LM393 module used by the dyno has
+// its own output pull-up, so GPIO3 is configured as a plain input.
+static const uint8_t WHEEL_SPOKES = 12;
+static const float WHEEL_DIAMETER_M = 20.0f * 0.0254f;
+static const float WHEEL_CIRCUMFERENCE_M = PI * WHEEL_DIAMETER_M;
+static const uint32_t SPEED_MIN_PULSE_INTERVAL_US = 500;
+static const uint32_t SPEED_STOP_TIMEOUT_US = 2000000;
+
+volatile bool g_speedHasPulse = false;
+volatile uint32_t g_speedLastPulseUs = 0;
+volatile uint32_t g_speedIntervalSumUs = 0;
+volatile uint16_t g_speedIntervalCount = 0;
+volatile uint32_t g_speedSpokeCount = 0;
+
+bool g_wheelSpeedValid = false;
+float g_wheelSpeedKmph = 0.0f;
+float g_wheelRpm = 0.0f;
+uint32_t g_wheelSpokeCount = 0;
 
 // =========================
 // Device addresses
@@ -167,7 +197,9 @@ uint16_t g_sdLogIndex = 0;
 bool g_sdReady = false;
 bool g_loggingEnabled = false;
 
-static const char *LITTLEFS_LOG_FILE = "/telemetry_v2.bin";
+// The record layout includes wheel-speed fields, so use a new backup filename
+// instead of interpreting older binary records with the new structure.
+static const char *LITTLEFS_LOG_FILE = "/telemetry_v2_speed.bin";
 
 volatile bool buttonEvent = false;
 uint32_t lastButtonHandledMs = 0;
@@ -185,6 +217,11 @@ struct TelemetryRecord_t
 
   int16_t temperature_c_x100;
   uint8_t temperature_valid;
+
+  uint8_t wheel_speed_valid;
+  uint32_t wheel_speed_kmph_x100;
+  uint32_t wheel_rpm_x10;
+  uint32_t wheel_spoke_count;
 
   int16_t accel_x_mps2_x100;
   int16_t accel_y_mps2_x100;
@@ -210,6 +247,7 @@ struct TelemetryRecord_t
 // Forward declarations
 // =========================
 void serviceGps();
+void updateWheelSpeed();
 void updateLoggingLed();
 bool selectNextSDLogFile();
 void startLoggingNewFile(const char *reason);
@@ -220,6 +258,90 @@ void startLoggingNewFile(const char *reason);
 void IRAM_ATTR buttonISR()
 {
   buttonEvent = true;
+}
+
+void IRAM_ATTR speedPulseISR()
+{
+  uint32_t nowUs = micros();
+
+  if (!g_speedHasPulse) {
+    g_speedHasPulse = true;
+    g_speedLastPulseUs = nowUs;
+    g_speedSpokeCount++;
+    return;
+  }
+
+  uint32_t intervalUs = nowUs - g_speedLastPulseUs;
+
+  // Preserve the dyno firmware's 500 us chatter rejection. Rejected edges do
+  // not move the reference timestamp, so bounce cannot drift the measurement.
+  if (intervalUs < SPEED_MIN_PULSE_INTERVAL_US) {
+    return;
+  }
+
+  g_speedLastPulseUs = nowUs;
+  g_speedSpokeCount++;
+
+  // Do not turn a long stopped period into one misleading low-speed sample.
+  // The next spoke interval will establish the restarted wheel speed.
+  if (intervalUs >= SPEED_STOP_TIMEOUT_US) {
+    return;
+  }
+
+  if (UINT32_MAX - g_speedIntervalSumUs < intervalUs ||
+      g_speedIntervalCount == UINT16_MAX) {
+    g_speedIntervalSumUs = intervalUs;
+    g_speedIntervalCount = 1;
+  } else {
+    g_speedIntervalSumUs += intervalUs;
+    g_speedIntervalCount++;
+  }
+}
+
+void updateWheelSpeed()
+{
+  uint32_t intervalSumUs;
+  uint16_t intervalCount;
+  uint32_t lastPulseUs;
+  uint32_t spokeCount;
+  bool hasPulse;
+
+  noInterrupts();
+  intervalSumUs = g_speedIntervalSumUs;
+  intervalCount = g_speedIntervalCount;
+  g_speedIntervalSumUs = 0;
+  g_speedIntervalCount = 0;
+  lastPulseUs = g_speedLastPulseUs;
+  spokeCount = g_speedSpokeCount;
+  hasPulse = g_speedHasPulse;
+  interrupts();
+
+  g_wheelSpokeCount = spokeCount;
+
+  if (intervalCount > 0) {
+    float averageIntervalUs =
+      (float)intervalSumUs / (float)intervalCount;
+
+    g_wheelRpm =
+      60000000.0f / ((float)WHEEL_SPOKES * averageIntervalUs);
+    g_wheelSpeedKmph =
+      WHEEL_CIRCUMFERENCE_M * (g_wheelRpm / 60.0f) * 3.6f;
+    g_wheelSpeedValid = true;
+    return;
+  }
+
+  if (!hasPulse) {
+    g_wheelSpeedValid = false;
+    g_wheelSpeedKmph = 0.0f;
+    g_wheelRpm = 0.0f;
+    return;
+  }
+
+  if ((uint32_t)(micros() - lastPulseUs) >= SPEED_STOP_TIMEOUT_US) {
+    g_wheelSpeedValid = true;
+    g_wheelSpeedKmph = 0.0f;
+    g_wheelRpm = 0.0f;
+  }
 }
 
 // =========================
@@ -739,6 +861,7 @@ void dumpLittleFSLogCsv()
 
   Serial.println(
     "timestamp_ms,current_mA,voltage_mV,temperature_C,temperature_valid,"
+    "wheel_speed_valid,wheel_speed_kmph,wheel_rpm,wheel_spoke_count,"
     "ax_x100,ay_x100,az_x100,amag_x100,"
     "gps_location_valid,gps_lat,gps_long,gps_alt_m,gps_speed_kmph,"
     "gps_hdop,gps_sats,gps_time_valid,gps_time_utc,gps_centisecond"
@@ -757,12 +880,16 @@ void dumpLittleFSLogCsv()
     }
 
     Serial.printf(
-      "%lu,%d,%ld,%.2f,%u,%d,%d,%d,%u,%u,%.7f,%.7f,%.2f,%.2f,%.2f,%u,%u,%02u:%02u:%02u,%02u\n",
+      "%lu,%d,%ld,%.2f,%u,%u,%.2f,%.1f,%lu,%d,%d,%d,%u,%u,%.7f,%.7f,%.2f,%.2f,%.2f,%u,%u,%02u:%02u:%02u,%02u\n",
       (unsigned long)rec.timestamp_ms,
       rec.current_mA,
       (long)rec.voltage_mV,
       rec.temperature_c_x100 / 100.0f,
       rec.temperature_valid,
+      rec.wheel_speed_valid,
+      rec.wheel_speed_kmph_x100 / 100.0f,
+      rec.wheel_rpm_x10 / 10.0f,
+      (unsigned long)rec.wheel_spoke_count,
       rec.accel_x_mps2_x100,
       rec.accel_y_mps2_x100,
       rec.accel_z_mps2_x100,
@@ -854,6 +981,7 @@ bool writeSDCsvHeader(const char *path)
 
   file.println(
     "timestamp_ms,current_mA,voltage_mV,temperature_C,temperature_valid,"
+    "wheel_speed_valid,wheel_speed_kmph,wheel_rpm,wheel_spoke_count,"
     "ax_x100,ay_x100,az_x100,amag_x100,"
     "gps_location_valid,gps_lat,gps_long,gps_alt_m,gps_speed_kmph,"
     "gps_hdop,gps_sats,gps_time_valid,gps_time_utc,gps_centisecond"
@@ -952,12 +1080,16 @@ bool appendRecordSD(const TelemetryRecord_t &rec)
   }
 
   size_t bytesWritten = file.printf(
-    "%lu,%d,%ld,%.2f,%u,%d,%d,%d,%u,%u,%.7f,%.7f,%.2f,%.2f,%.2f,%u,%u,%02u:%02u:%02u,%02u\n",
+    "%lu,%d,%ld,%.2f,%u,%u,%.2f,%.1f,%lu,%d,%d,%d,%u,%u,%.7f,%.7f,%.2f,%.2f,%.2f,%u,%u,%02u:%02u:%02u,%02u\n",
     (unsigned long)rec.timestamp_ms,
     rec.current_mA,
     (long)rec.voltage_mV,
     rec.temperature_c_x100 / 100.0f,
     rec.temperature_valid,
+    rec.wheel_speed_valid,
+    rec.wheel_speed_kmph_x100 / 100.0f,
+    rec.wheel_rpm_x10 / 10.0f,
+    (unsigned long)rec.wheel_spoke_count,
     rec.accel_x_mps2_x100,
     rec.accel_y_mps2_x100,
     rec.accel_z_mps2_x100,
@@ -1093,8 +1225,22 @@ void setup()
     FALLING
   );
 
+  pinMode(SPEED_SENSOR_PIN, INPUT);
+  attachInterrupt(
+    digitalPinToInterrupt(SPEED_SENSOR_PIN),
+    speedPulseISR,
+    RISING
+  );
+
   Serial.println();
-  Serial.println("ESP32-C3 combined telemetry logger");
+  Serial.println("ESP32-C3 TelemV2 vehicle telemetry logger");
+  Serial.printf(
+    "Speedometer: GPIO%d, %u spokes, %.1f inch wheel diameter, %.4f m circumference\n",
+    SPEED_SENSOR_PIN,
+    WHEEL_SPOKES,
+    WHEEL_DIAMETER_M / 0.0254f,
+    WHEEL_CIRCUMFERENCE_M
+  );
 
   g_sdReady = initSDCard();
   if (!g_sdReady) {
@@ -1154,6 +1300,7 @@ void loop()
 {
   // Always service GPS, including while logging is stopped.
   serviceGps();
+  updateWheelSpeed();
   printGpsDiagnosticIfNeeded();
   handleSerialCommands();
 
@@ -1244,6 +1391,15 @@ void loop()
                              ? (int16_t)lroundf(temperatureC * 100.0f)
                              : 0;
 
+  rec.wheel_speed_valid = g_wheelSpeedValid ? 1 : 0;
+  rec.wheel_speed_kmph_x100 = g_wheelSpeedValid
+                                ? (uint32_t)lroundf(g_wheelSpeedKmph * 100.0f)
+                                : 0;
+  rec.wheel_rpm_x10 = g_wheelSpeedValid
+                        ? (uint32_t)lroundf(g_wheelRpm * 10.0f)
+                        : 0;
+  rec.wheel_spoke_count = g_wheelSpokeCount;
+
   rec.accel_x_mps2_x100 = (int16_t)lroundf(axAverage * 100.0f);
   rec.accel_y_mps2_x100 = (int16_t)lroundf(ayAverage * 100.0f);
   rec.accel_z_mps2_x100 = (int16_t)lroundf(azAverage * 100.0f);
@@ -1259,6 +1415,7 @@ void loop()
   if (appendRecordSD(rec)) {
     Serial.printf(
       "SD LOG %s t=%lu ms I=%d mA V=%ld mV Temp=%s%.2f C "
+      "Wheel=%s%.2f km/h RPM=%.1f spokes=%lu "
       "Ax=%d Ay=%d Az=%d Mag=%u GPS=%u sats=%u raw=%d\n",
       g_sdLogFile,
       (unsigned long)rec.timestamp_ms,
@@ -1266,6 +1423,10 @@ void loop()
       (long)rec.voltage_mV,
       rec.temperature_valid ? "" : "INVALID/",
       rec.temperature_c_x100 / 100.0f,
+      rec.wheel_speed_valid ? "" : "INVALID/",
+      rec.wheel_speed_kmph_x100 / 100.0f,
+      rec.wheel_rpm_x10 / 10.0f,
+      (unsigned long)rec.wheel_spoke_count,
       rec.accel_x_mps2_x100,
       rec.accel_y_mps2_x100,
       rec.accel_z_mps2_x100,
@@ -1280,7 +1441,3 @@ void loop()
 
   delay(20);
 }
-
-out = Path('/mnt/data/combined_telemetry_logger.ino')
-out.write_text(code)
-print(f"Created {out} ({out.stat().st_size} bytes, {len(code.splitlines())} lines)")
