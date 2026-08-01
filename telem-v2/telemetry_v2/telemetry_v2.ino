@@ -73,14 +73,23 @@ static const uint32_t GPS_BAUD = 9600;
 // =========================
 // Beam-break speedometer
 // =========================
-// Each spoke creates one rising edge. The LM393 module used by the dyno has
-// its own output pull-up, so GPIO3 is configured as a plain input.
+// The LM393 output is LOW while a spoke blocks the beam and HIGH while the
+// beam is clear. A small high-priority task debounces both states and counts
+// exactly one completed blocked-to-clear cycle per spoke. This prevents
+// comparator flicker at either spoke border from becoming extra wheel pulses.
+// The module used by the dyno has its own output pull-up, so GPIO3 is a plain
+// input.
 static const uint8_t WHEEL_SPOKES = 12;
 static const float WHEEL_DIAMETER_M = 20.0f * 0.0254f;
 static const float WHEEL_CIRCUMFERENCE_M = PI * WHEEL_DIAMETER_M;
-static const uint32_t SPEED_MIN_PULSE_INTERVAL_US = 500;
+static const uint32_t SPEED_SAMPLE_PERIOD_MS = 1;
+static const uint32_t SPEED_STATE_DEBOUNCE_US = 2000;
+// Real spoke events are about 12 ms apart at the vehicle's 40 km/h maximum.
+// An 8 ms guard rejects impossible repeats while retaining margin to 60 km/h.
+static const uint32_t SPEED_MIN_PULSE_INTERVAL_US = 8000;
 static const uint32_t SPEED_STOP_TIMEOUT_US = 2000000;
 
+portMUX_TYPE g_speedMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool g_speedHasPulse = false;
 volatile uint32_t g_speedLastPulseUs = 0;
 volatile uint32_t g_speedIntervalSumUs = 0;
@@ -267,22 +276,24 @@ void IRAM_ATTR buttonISR()
   buttonEvent = true;
 }
 
-void IRAM_ATTR speedPulseISR()
+void acceptSpeedPulse(uint32_t nowUs)
 {
-  uint32_t nowUs = micros();
+  portENTER_CRITICAL(&g_speedMux);
 
   if (!g_speedHasPulse) {
     g_speedHasPulse = true;
     g_speedLastPulseUs = nowUs;
     g_speedSpokeCount = g_speedSpokeCount + 1;
+    portEXIT_CRITICAL(&g_speedMux);
     return;
   }
 
   uint32_t intervalUs = nowUs - g_speedLastPulseUs;
 
-  // Preserve the dyno firmware's 500 us chatter rejection. Rejected edges do
-  // not move the reference timestamp, so bounce cannot drift the measurement.
+  // Reject repeats that imply a speed above the 60 km/h measurement margin.
+  // Rejected events do not move the reference timestamp.
   if (intervalUs < SPEED_MIN_PULSE_INTERVAL_US) {
+    portEXIT_CRITICAL(&g_speedMux);
     return;
   }
 
@@ -292,6 +303,7 @@ void IRAM_ATTR speedPulseISR()
   // Do not turn a long stopped period into one misleading low-speed sample.
   // The next spoke interval will establish the restarted wheel speed.
   if (intervalUs >= SPEED_STOP_TIMEOUT_US) {
+    portEXIT_CRITICAL(&g_speedMux);
     return;
   }
 
@@ -303,6 +315,48 @@ void IRAM_ATTR speedPulseISR()
     g_speedIntervalSumUs += intervalUs;
     g_speedIntervalCount = g_speedIntervalCount + 1;
   }
+
+  portEXIT_CRITICAL(&g_speedMux);
+}
+
+void speedSensorTask(void *parameter)
+{
+  (void)parameter;
+
+  bool candidateClear = digitalRead(SPEED_SENSOR_PIN) == HIGH;
+  bool stableClear = candidateClear;
+  bool stableStateKnown = false;
+  bool blockedCycleArmed = false;
+  uint32_t candidateSinceUs = micros();
+
+  for (;;) {
+    uint32_t nowUs = micros();
+    bool sampleClear = digitalRead(SPEED_SENSOR_PIN) == HIGH;
+
+    if (sampleClear != candidateClear) {
+      candidateClear = sampleClear;
+      candidateSinceUs = nowUs;
+    } else if ((uint32_t)(nowUs - candidateSinceUs) >=
+               SPEED_STATE_DEBOUNCE_US) {
+      if (!stableStateKnown) {
+        stableStateKnown = true;
+        stableClear = candidateClear;
+        blockedCycleArmed = !stableClear;
+      } else if (candidateClear != stableClear) {
+        stableClear = candidateClear;
+
+        if (!stableClear) {
+          // A stable blocked state arms exactly one future clear event.
+          blockedCycleArmed = true;
+        } else if (blockedCycleArmed) {
+          blockedCycleArmed = false;
+          acceptSpeedPulse(nowUs);
+        }
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(SPEED_SAMPLE_PERIOD_MS));
+  }
 }
 
 void updateWheelSpeed()
@@ -313,7 +367,7 @@ void updateWheelSpeed()
   uint32_t spokeCount;
   bool hasPulse;
 
-  noInterrupts();
+  portENTER_CRITICAL(&g_speedMux);
   intervalSumUs = g_speedIntervalSumUs;
   intervalCount = g_speedIntervalCount;
   g_speedIntervalSumUs = 0;
@@ -321,7 +375,7 @@ void updateWheelSpeed()
   lastPulseUs = g_speedLastPulseUs;
   spokeCount = g_speedSpokeCount;
   hasPulse = g_speedHasPulse;
-  interrupts();
+  portEXIT_CRITICAL(&g_speedMux);
 
   g_wheelSpokeCount = spokeCount;
 
@@ -1287,20 +1341,29 @@ void setup()
   );
 
   pinMode(SPEED_SENSOR_PIN, INPUT);
-  attachInterrupt(
-    digitalPinToInterrupt(SPEED_SENSOR_PIN),
-    speedPulseISR,
-    RISING
+  BaseType_t speedTaskStarted = xTaskCreate(
+    speedSensorTask,
+    "speed-sensor",
+    2048,
+    nullptr,
+    2,
+    nullptr
   );
+
+  if (speedTaskStarted != pdPASS) {
+    fatalFault(8, "speed sensor task could not start");
+  }
 
   Serial.println();
   Serial.println("ESP32-C3 TelemV2 vehicle telemetry logger");
   Serial.printf(
-    "Speedometer: GPIO%d, %u spokes, %.1f inch wheel diameter, %.4f m circumference\n",
+    "Speedometer: GPIO%d, %u spokes, %.1f inch wheel diameter, %.4f m circumference, %lu us debounce, %lu us guard\n",
     SPEED_SENSOR_PIN,
     WHEEL_SPOKES,
     WHEEL_DIAMETER_M / 0.0254f,
-    WHEEL_CIRCUMFERENCE_M
+    WHEEL_CIRCUMFERENCE_M,
+    (unsigned long)SPEED_STATE_DEBOUNCE_US,
+    (unsigned long)SPEED_MIN_PULSE_INTERVAL_US
   );
 
   g_sdReady = initSDCard();

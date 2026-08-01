@@ -7,12 +7,15 @@ status LED connections, then adds temperature, GPS, and wheel speed.
 ## Beam-break speedometer
 
 The TelemV2 PCB routes the speedometer connector's digital output to GPIO3.
-The firmware counts one rising edge whenever a wheel spoke breaks the beam.
+The sensor output is LOW while a spoke blocks the beam and HIGH while the beam
+is clear. The firmware counts one debounced blocked-to-clear cycle per spoke.
 
 - Wheel diameter: 20 inches (`0.508 m`)
 - Spokes/pulses per revolution: 12
 - Wheel circumference: `pi * 0.508 m`, approximately `1.596 m`
-- Chatter rejection: edges less than `500 us` after the previous accepted edge
+- State debounce: both blocked and clear must remain unchanged for `2 ms`
+- Physical-speed guard: accepted cycles less than `8 ms` apart are ignored;
+  this supports approximately `60 km/h`, above the vehicle's `40 km/h` maximum
 - Stopped-wheel timeout: `2 s` without an accepted edge
 
 For an average interval `dt_us` between accepted spoke edges:
@@ -53,6 +56,7 @@ A fatal fault repeats a numbered group of 200 ms flashes followed by a
 | 5 | MPU6050 initialization | Address `0x68`, SDA 8, SCL 9, 3.3 V and ground |
 | 6 | Current offset calibration | ADS1115/current-sensor wiring and resting current |
 | 7 | SD log-file creation or write | FAT32/free space/card contacts; inspect or replace card |
+| 8 | Speed-sensor task startup | Reset or reflash the ESP32-C3; report if the fault repeats |
 
 The fault pattern continues until power is removed or the board is reset.
 
