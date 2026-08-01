@@ -20,6 +20,8 @@
       /YYYY-MM-DD-HH-MM.csv
   If that name already exists:
       /YYYY-MM-DD-HH-MM-001.csv
+  If GPS time is unavailable after the startup wait:
+      /telemetry_001.csv
 
   Pin mapping (ESP32-C3 Super Mini):
     I2C SDA       GPIO8
@@ -430,7 +432,7 @@ bool waitForGpsDateTime(uint32_t timeoutMs)
   }
 
   setLed(false);
-  Serial.println("GPS UTC date/time was not acquired. Logging was not started.");
+  Serial.println("GPS UTC date/time was not acquired.");
   return false;
 }
 
@@ -1020,6 +1022,31 @@ bool selectNextSDLogFile()
   }
 
   if (!makeGpsTimestampLogFilename(g_sdLogFile, sizeof(g_sdLogFile))) {
+    for (uint16_t index = 1; index <= SD_MAX_LOG_FILES; index++) {
+      snprintf(
+        g_sdLogFile,
+        sizeof(g_sdLogFile),
+        "/telemetry_%03u.csv",
+        index
+      );
+
+      if (!SD.exists(g_sdLogFile)) {
+        if (!writeSDCsvHeader(g_sdLogFile)) {
+          return false;
+        }
+
+        g_sdLogIndex = index;
+        Serial.printf(
+          "GPS time unavailable; new fallback SD log file: %s\n",
+          g_sdLogFile
+        );
+        return true;
+      }
+    }
+
+    Serial.println(
+      "No free fallback filename remains. Delete old telemetry_###.csv files."
+    );
     return false;
   }
 
@@ -1125,9 +1152,9 @@ void startLoggingNewFile(const char *reason)
   }
 
   if (!waitForGpsDateTime(GPS_FILENAME_WAIT_MS)) {
-    g_loggingEnabled = false;
-    updateLoggingLed();
-    return;
+    Serial.println(
+      "Continuing without GPS time using a telemetry_###.csv filename."
+    );
   }
 
   if (!selectNextSDLogFile()) {

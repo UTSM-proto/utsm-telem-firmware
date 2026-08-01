@@ -26,6 +26,15 @@ The CSV contains `wheel_speed_valid`, `wheel_speed_kmph`, `wheel_rpm`, and a
 cumulative `wheel_spoke_count`. GPS speed remains a separate field so the two
 measurements can be compared during testing.
 
+## Indoor operation without GPS
+
+At startup the logger waits up to 30 seconds for valid GPS UTC time. If GPS is
+available, it creates the usual timestamped file such as
+`/2026-08-01-15-30.csv`. If GPS is unavailable indoors, logging still starts
+using the first free TelemV1-style filename from `/telemetry_001.csv` through
+`/telemetry_999.csv`. GPS continues running in the background and its fields
+begin populating if a fix becomes available later in the same session.
+
 ## Hardware-test checklist
 
 1. Confirm the LM393 digital output presented to ESP32-C3 GPIO3 never exceeds
