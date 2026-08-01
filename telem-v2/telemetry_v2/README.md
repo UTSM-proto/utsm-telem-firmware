@@ -35,6 +35,27 @@ using the first free TelemV1-style filename from `/telemetry_001.csv` through
 `/telemetry_999.csv`. GPS continues running in the background and its fields
 begin populating if a fix becomes available later in the same session.
 
+## Status LED and fault codes
+
+Normal startup flashes rapidly for about one second, then flashes during the
+18-second current-sensor warmup/calibration and the optional 30-second GPS
+wait. A solid LED means the logger is recording. An unlit LED after successful
+startup means logging was manually stopped with the button or serial command.
+
+A fatal fault repeats a numbered group of 200 ms flashes followed by a
+1.5-second pause. Count the flashes in one group:
+
+| Flashes | Fault | First checks |
+| ---: | --- | --- |
+| 2 | SD card initialization/mount | Card inserted, FAT32, CS 7, MOSI 6, MISO 5, SCK 4 |
+| 3 | LittleFS mount | Reflash with the correct ESP32-C3 flash/partition settings |
+| 4 | ADS1115 initialization | Address `0x48`, SDA 8, SCL 9, 3.3 V and ground |
+| 5 | MPU6050 initialization | Address `0x68`, SDA 8, SCL 9, 3.3 V and ground |
+| 6 | Current offset calibration | ADS1115/current-sensor wiring and resting current |
+| 7 | SD log-file creation or write | FAT32/free space/card contacts; inspect or replace card |
+
+The fault pattern continues until power is removed or the board is reset.
+
 ## Hardware-test checklist
 
 1. Confirm the LM393 digital output presented to ESP32-C3 GPIO3 never exceeds

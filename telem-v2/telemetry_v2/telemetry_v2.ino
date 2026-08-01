@@ -23,6 +23,11 @@
   If GPS time is unavailable after the startup wait:
       /telemetry_001.csv
 
+  Status LED:
+    - Repeating flashes with a long pause indicate a fatal fault. Count the
+      flashes and see telem-v2/telemetry_v2/README.md.
+    - Solid ON means recording. OFF means manually stopped.
+
   Pin mapping (ESP32-C3 Super Mini):
     I2C SDA       GPIO8
     I2C SCL       GPIO9
@@ -269,7 +274,7 @@ void IRAM_ATTR speedPulseISR()
   if (!g_speedHasPulse) {
     g_speedHasPulse = true;
     g_speedLastPulseUs = nowUs;
-    g_speedSpokeCount++;
+    g_speedSpokeCount = g_speedSpokeCount + 1;
     return;
   }
 
@@ -282,7 +287,7 @@ void IRAM_ATTR speedPulseISR()
   }
 
   g_speedLastPulseUs = nowUs;
-  g_speedSpokeCount++;
+  g_speedSpokeCount = g_speedSpokeCount + 1;
 
   // Do not turn a long stopped period into one misleading low-speed sample.
   // The next spoke interval will establish the restarted wheel speed.
@@ -296,7 +301,7 @@ void IRAM_ATTR speedPulseISR()
     g_speedIntervalCount = 1;
   } else {
     g_speedIntervalSumUs += intervalUs;
-    g_speedIntervalCount++;
+    g_speedIntervalCount = g_speedIntervalCount + 1;
   }
 }
 
@@ -508,6 +513,41 @@ void blinkLedFor(uint32_t durationMs, uint32_t intervalMs = 250)
   }
 
   setLed(false);
+}
+
+void waitWhileServicingGps(uint32_t durationMs)
+{
+  uint32_t startMs = millis();
+
+  while (millis() - startMs < durationMs) {
+    serviceGps();
+    delay(10);
+  }
+}
+
+void fatalFault(uint8_t flashCount, const char *message)
+{
+  g_loggingEnabled = false;
+  setLed(false);
+
+  Serial.printf(
+    "FATAL fault %u: %s\n",
+    flashCount,
+    message != nullptr ? message : "unknown"
+  );
+
+  // Repeat the numbered pattern forever: 200 ms ON, 200 ms OFF for each
+  // count, then a 1.5 second pause before the next group.
+  while (true) {
+    for (uint8_t flash = 0; flash < flashCount; flash++) {
+      setLed(true);
+      waitWhileServicingGps(200);
+      setLed(false);
+      waitWhileServicingGps(200);
+    }
+
+    waitWhileServicingGps(1500);
+  }
 }
 
 // =========================
@@ -1145,10 +1185,7 @@ bool appendRecordSD(const TelemetryRecord_t &rec)
 void startLoggingNewFile(const char *reason)
 {
   if (!g_sdReady) {
-    g_loggingEnabled = false;
-    updateLoggingLed();
-    Serial.println("Logging not started because the SD card is unavailable.");
-    return;
+    fatalFault(2, "SD card unavailable");
   }
 
   if (!waitForGpsDateTime(GPS_FILENAME_WAIT_MS)) {
@@ -1158,10 +1195,7 @@ void startLoggingNewFile(const char *reason)
   }
 
   if (!selectNextSDLogFile()) {
-    g_loggingEnabled = false;
-    updateLoggingLed();
-    Serial.println("Logging not started because a timestamped CSV could not be created.");
-    return;
+    fatalFault(7, "SD log file could not be created");
   }
 
   g_loggingEnabled = true;
@@ -1271,7 +1305,7 @@ void setup()
 
   g_sdReady = initSDCard();
   if (!g_sdReady) {
-    Serial.println("SD initialization failed; logging will remain disabled.");
+    fatalFault(2, "SD card initialization failed");
   }
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
@@ -1279,37 +1313,22 @@ void setup()
   scanI2C();
 
   if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed.");
-    while (true) {
-      serviceGps();
-      delay(1000);
-    }
+    fatalFault(3, "LittleFS mount failed");
   }
   Serial.println("LittleFS mounted.");
 
   if (!adc16Init()) {
-    Serial.println("ADS1115 initialization failed.");
-    while (true) {
-      serviceGps();
-      delay(1000);
-    }
+    fatalFault(4, "ADS1115 initialization failed");
   }
   Serial.println("ADS1115 initialized.");
 
   if (!mpuInit()) {
-    Serial.println("MPU6050 initialization failed.");
-    while (true) {
-      serviceGps();
-      delay(1000);
-    }
+    fatalFault(5, "MPU6050 initialization failed");
   }
   Serial.println("MPU6050 initialized.");
 
   if (!calibrateCurrentOffset()) {
-    while (true) {
-      serviceGps();
-      delay(1000);
-    }
+    fatalFault(6, "current offset calibration failed");
   }
 
   printHelp();
@@ -1464,6 +1483,7 @@ void loop()
     );
   } else {
     Serial.println("SD write failed.");
+    fatalFault(7, "SD log write failed");
   }
 
   delay(20);
