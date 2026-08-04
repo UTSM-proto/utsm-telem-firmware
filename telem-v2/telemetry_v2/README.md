@@ -29,6 +29,21 @@ The CSV contains `wheel_speed_valid`, `wheel_speed_kmph`, `wheel_rpm`, and a
 cumulative `wheel_spoke_count`. GPS speed remains a separate field so the two
 measurements can be compared during testing.
 
+## Live LTE tracking
+
+While SD logging is active, TelemV2 broadcasts a best-effort 1 Hz mirror over
+ESP-NOW channel 1. The WROVER/A7670 relay in `lte_relay/` receives each packet
+and immediately posts it over LTE to the existing live dashboard. No UART
+wires are required between the boards.
+
+The live packet contains current, voltage, acceleration, and valid GPS
+latitude/longitude. The dashboard map begins tracking as soon as the GPS has a
+fix. SD remains the complete source of truth: ESP-NOW, relay, LTE, or server
+failure never stops or delays the CSV logger, and missed live records are not
+backfilled.
+
+For the full setup and demo sequence, see `../../lte_relay/README.md`.
+
 ## Indoor operation without GPS
 
 At startup the logger waits up to 30 seconds for valid GPS UTC time. If GPS is

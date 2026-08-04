@@ -7,7 +7,7 @@ complete source of truth; this relay intentionally has no persistent buffer.
 ## Hardware
 
 - LILYGO T-A7670E/G/SA ESP32-WROVER-E board
-- ESP32-C3 SuperMini on the `telem-v1` telemetry board
+- ESP32-C3 SuperMini on the TelemV2 telemetry board
 - LTE main antenna attached before powering the modem
 - Activated nano-SIM with data service
 - Stable USB/5 V supply capable of modem current peaks (use at least 2 A)
@@ -121,8 +121,8 @@ Quick-tunnel hostnames change whenever the tunnel is restarted.
 - The original ESP32-C3 SD CSV is unaffected.
 - The logger broadcasts at 1 Hz to avoid overwhelming LTE with the full sensor
   sample rate. Change `LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS` if required.
-- GPS fields are already part of packet version 1. The map activates when a
-  future logger integration passes valid `latitude_e7` and `longitude_e7`.
+- TelemV2 sends valid GPS latitude/longitude with the live packet. The map
+  activates automatically after the GPS obtains a fix.
 
 ## Level 2: LTE-only dummy test
 
@@ -169,10 +169,31 @@ C3 dummy sender ready; transmitting every 2 seconds
 C3 ESP-NOW queued seq=0 I=11000 mA V=49560 mV
 ```
 
-Both boards are explicitly pinned to ESP-NOW channel 1 for this demo. The
-canonical telemetry logger uses the same sender channel and packet layout, so
-returning from dummy data to real data only requires flashing
-`telem-v1/telemetry_gpio1_led_sd_per_session.ino` back onto the C3.
+Both boards are explicitly pinned to ESP-NOW channel 1 for this demo.
+
+## Level 4: TelemV2 live vehicle demo
+
+This is the real end-to-end path:
+`TelemV2 -> ESP-NOW -> WROVER/A7670 -> LTE -> HTTPS -> live dashboard`.
+
+1. Start the dashboard with `UTSM_TELEMETRY_API_KEY` set and open `/live`.
+2. Start a Cloudflare quick tunnel and copy its current HTTPS hostname.
+3. In the ignored `relay_config.h`, set `TELEMETRY_ENDPOINT` to that hostname
+   followed by `/api/live/telemetry`, use the same API key as the server, and
+   ensure `LTE_DUMMY_TEST_MODE = false`.
+4. Flash `lte_relay/lte_relay.ino` to the WROVER/A7670 board.
+5. Flash `telem-v2/telemetry_v2/telemetry_v2.ino` to the ESP32-C3 logger.
+6. Attach the LTE and GPS antennas, insert the SIM, power both boards, and
+   leave the laptop running the dashboard and tunnel.
+7. Wait through TelemV2 initialization. Its LED becomes solid when SD logging
+   starts. Outdoors, wait for the live page map to receive a GPS position.
+8. The page should receive a new row about once per second. Move the car
+   outdoors and the GPS marker/trail should move with the vehicle.
+
+The relay's serial success line is `LIVE seq=N delivered`, but serial access is
+not required in the vehicle: increasing sequence numbers on `/live` prove the
+complete path. If rows update without a map marker, LTE is working but the GPS
+does not yet have a valid fix.
 
 If the C3 prints `queued` but the relay prints nothing, confirm both serial
 monitors report ESP-NOW channel 1. If the relay reports HTTP 401, the dashboard

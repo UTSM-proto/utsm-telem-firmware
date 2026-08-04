@@ -6,6 +6,7 @@
     - Install "esp32 by Espressif Systems" in Boards Manager
     - Install "TinyGPSPlus by Mikal Hart" in Library Manager
     - Wire, LittleFS, FS, SD, and SPI are included with the ESP32 board core
+    - WiFi and ESP-NOW are included with the ESP32 board core
 
   Collects:
     - Current from ADS1115 AIN0
@@ -15,6 +16,8 @@
     - Wheel speed from a beam-break sensor and 12 wheel spokes
     - GPS position, speed, altitude, HDOP, satellites, and UTC time
   Writes each recording session to an SD-card CSV.
+  Mirrors current, voltage, acceleration, and GPS at 1 Hz over ESP-NOW to the
+  vehicle's WROVER/A7670 LTE relay. Live forwarding never blocks SD logging.
 
   CSV filenames are derived directly from GPS UTC time:
       /YYYY-MM-DD-HH-MM.csv
@@ -51,6 +54,7 @@
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
+#include "live_telemetry_espnow.h"
 
 // =========================
 // Pin mapping
@@ -212,6 +216,7 @@ uint16_t g_sdLogIndex = 0;
 
 bool g_sdReady = false;
 bool g_loggingEnabled = false;
+LiveTelemetryEspNowSender g_liveTelemetry;
 
 // The record layout includes wheel-speed fields, so use a new backup filename
 // instead of interpreting older binary records with the new structure.
@@ -1366,6 +1371,10 @@ void setup()
     (unsigned long)SPEED_MIN_PULSE_INTERVAL_US
   );
 
+  // Live telemetry is best-effort. Failure here is intentionally non-fatal so
+  // the SD logger remains fully usable without the relay.
+  g_liveTelemetry.begin();
+
   g_sdReady = initSDCard();
   if (!g_sdReady) {
     fatalFault(2, "SD card initialization failed");
@@ -1548,6 +1557,21 @@ void loop()
     Serial.println("SD write failed.");
     fatalFault(7, "SD log write failed");
   }
+
+  // Mirror a throttled subset of this exact SD record to the WROVER LTE relay.
+  // GPS is omitted from the packet until TinyGPSPlus reports a valid fix.
+  g_liveTelemetry.send(
+    rec.timestamp_ms,
+    rec.current_mA,
+    rec.voltage_mV,
+    rec.accel_x_mps2_x100,
+    rec.accel_y_mps2_x100,
+    rec.accel_z_mps2_x100,
+    rec.accel_mag_mps2_x100,
+    rec.gps_location_valid != 0,
+    rec.gps_lat_e7,
+    rec.gps_long_e7
+  );
 
   delay(20);
 }
