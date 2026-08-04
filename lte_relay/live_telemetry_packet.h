@@ -7,6 +7,10 @@
 static const uint32_t LIVE_TELEMETRY_MAGIC = 0x5554534DUL;  // "UTSM"
 static const uint8_t LIVE_TELEMETRY_VERSION = 1;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_VALID = 0x01;
+static const uint8_t LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE = 0x02;
+static const uint8_t LIVE_TELEMETRY_FLAG_GPS_TIME_VALID = 0x04;
+static const uint8_t LIVE_TELEMETRY_GPS_SATS_SHIFT = 4;
+static const uint8_t LIVE_TELEMETRY_GPS_SATS_MASK = 0xF0;
 
 struct LiveTelemetryPacket
 {

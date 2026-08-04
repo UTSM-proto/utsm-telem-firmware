@@ -1569,6 +1569,9 @@ void loop()
     rec.accel_z_mps2_x100,
     rec.accel_mag_mps2_x100,
     rec.gps_location_valid != 0,
+    gps.charsProcessed() >= 10,
+    rec.gps_time_valid != 0,
+    rec.gps_sats,
     rec.gps_lat_e7,
     rec.gps_long_e7
   );

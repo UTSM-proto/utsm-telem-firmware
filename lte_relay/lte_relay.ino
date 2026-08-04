@@ -298,6 +298,22 @@ String packetToJson(const LiveTelemetryPacket &packet)
   return json;
 }
 
+void printGpsPacketStatus(const LiveTelemetryPacket &packet)
+{
+  uint8_t satellites =
+    (packet.flags & LIVE_TELEMETRY_GPS_SATS_MASK) >>
+    LIVE_TELEMETRY_GPS_SATS_SHIFT;
+
+  Serial.printf(
+    "GPS seq=%lu uart=%s sats=%u utc=%s fix=%s\n",
+    static_cast<unsigned long>(packet.sequence),
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE) ? "yes" : "no",
+    satellites,
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_TIME_VALID) ? "yes" : "no",
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_VALID) ? "yes" : "no"
+  );
+}
+
 LiveTelemetryPacket makeDummyPacket()
 {
   static uint32_t dummyBootId = esp_random();
@@ -307,7 +323,12 @@ LiveTelemetryPacket makeDummyPacket()
   LiveTelemetryPacket packet = {};
   packet.magic = LIVE_TELEMETRY_MAGIC;
   packet.version = LIVE_TELEMETRY_VERSION;
-  packet.flags = LTE_DUMMY_INCLUDE_GPS ? LIVE_TELEMETRY_FLAG_GPS_VALID : 0;
+  packet.flags = LTE_DUMMY_INCLUDE_GPS
+    ? LIVE_TELEMETRY_FLAG_GPS_VALID |
+      LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE |
+      LIVE_TELEMETRY_FLAG_GPS_TIME_VALID |
+      (12 << LIVE_TELEMETRY_GPS_SATS_SHIFT)
+    : 0;
   packet.packet_size = sizeof(packet);
   packet.boot_id = dummyBootId;
   packet.sequence = dummySequence++;
@@ -395,6 +416,8 @@ void loop()
     delay(5);
     return;
   }
+
+  printGpsPacketStatus(packet);
 
   if (!networkReady) {
     Serial.printf("Dropping live seq=%lu while LTE is offline\n",

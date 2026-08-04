@@ -71,6 +71,9 @@ public:
     int16_t azX100,
     uint16_t amagX100,
     bool gpsValid,
+    bool gpsUartActive,
+    bool gpsTimeValid,
+    uint8_t gpsSatellites,
     int32_t latitudeE7,
     int32_t longitudeE7)
   {
@@ -83,7 +86,12 @@ public:
     LiveTelemetryPacket packet = {};
     packet.magic = LIVE_TELEMETRY_MAGIC;
     packet.version = LIVE_TELEMETRY_VERSION;
-    packet.flags = gpsValid ? LIVE_TELEMETRY_FLAG_GPS_VALID : 0;
+    packet.flags = 0;
+    if (gpsValid) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_VALID;
+    if (gpsUartActive) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE;
+    if (gpsTimeValid) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_TIME_VALID;
+    uint8_t encodedSatellites = gpsSatellites > 15 ? 15 : gpsSatellites;
+    packet.flags |= encodedSatellites << LIVE_TELEMETRY_GPS_SATS_SHIFT;
     packet.packet_size = sizeof(packet);
     packet.boot_id = _bootId;
     packet.sequence = _sequence++;

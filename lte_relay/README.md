@@ -195,6 +195,17 @@ not required in the vehicle: increasing sequence numbers on `/live` prove the
 complete path. If rows update without a map marker, LTE is working but the GPS
 does not yet have a valid fix.
 
+When only the WROVER Serial Monitor is accessible, each real packet also shows:
+
+```text
+GPS seq=12 uart=yes sats=7 utc=yes fix=yes
+```
+
+- `uart=no`: the C3 has received no NMEA characters; check GPS power/TX wiring.
+- `uart=yes sats=0`: the module is communicating but has not acquired satellites.
+- `sats>0 fix=no`: keep the antenna stationary with a clear view of the sky.
+- `fix=yes`: the next LTE post includes latitude/longitude for the live map.
+
 If the C3 prints `queued` but the relay prints nothing, confirm both serial
 monitors report ESP-NOW channel 1. If the relay reports HTTP 401, the dashboard
 and relay API keys differ. HTTP 404 usually means the endpoint is missing
