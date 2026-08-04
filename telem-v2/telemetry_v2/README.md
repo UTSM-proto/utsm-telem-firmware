@@ -43,6 +43,11 @@ fix. SD remains the complete source of truth: ESP-NOW, relay, LTE, or server
 failure never stops or delays the CSV logger, and missed live records are not
 backfilled.
 
+The TelemV2 PCB routes the GPS module's TX net to C3 GPIO21 and its RX net to
+C3 GPIO20. Firmware therefore configures UART RX on GPIO21 and UART TX on
+GPIO20. This intentionally differs from the older loose-wire GPS test sketch,
+which crossed TX to GPIO20 and RX to GPIO21 externally.
+
 For the full setup and demo sequence, see `../../lte_relay/README.md`.
 
 ## Indoor operation without GPS

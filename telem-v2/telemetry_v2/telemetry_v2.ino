@@ -41,8 +41,8 @@
     SD MISO       GPIO5
     SD MOSI       GPIO6
     SD CS         GPIO7
-    GPS RX        GPIO20 (connect to GPS TX)
-    GPS TX        GPIO21 (connect to GPS RX)
+    GPS RX        GPIO21 (PCB connects this pin to GPS module TX)
+    GPS TX        GPIO20 (PCB connects this pin to GPS module RX)
 */
 
 #include <Arduino.h>
@@ -70,8 +70,12 @@ static const int SD_MOSI = 6;
 static const int SD_MISO = 5;
 static const int SD_SCK  = 4;
 
-static const int GPS_RX_PIN = 20;
-static const int GPS_TX_PIN = 21;
+// The PCB nets are labelled from the GPS module's perspective: its RX net is
+// wired to GPIO20 and its TX net is wired to GPIO21. UART roles must therefore
+// be crossed here so the C3 listens to module TX on GPIO21 and transmits to
+// module RX on GPIO20.
+static const int GPS_RX_PIN = 21;
+static const int GPS_TX_PIN = 20;
 static const uint32_t GPS_BAUD = 9600;
 
 // =========================
@@ -438,7 +442,7 @@ void printGpsDiagnosticIfNeeded()
   lastGpsDiagnosticMs = now;
 
   if (gps.charsProcessed() < 10) {
-    Serial.println("ERROR: No GPS data received. Check GPS TX->GPIO20, GPS RX->GPIO21, power, and baud rate.");
+    Serial.println("ERROR: No GPS data received. PCB expects GPS TX->GPIO21, GPS RX->GPIO20, power, and 9600 baud.");
   }
 }
 
