@@ -776,8 +776,8 @@ void loop()
     Serial.println("SD write failed");
   }
 
-  // Mirror a throttled subset of the exact SD record. A future consolidated
-  // GPS sketch can pass gpsValid/latitudeE7/longitudeE7 to this same function.
+  // Mirror a throttled subset of the exact SD record. TelemV2 GPS firmware can
+  // pass gpsValid/latitudeE7/longitudeE7 to this same function.
   g_liveTelemetry.send(
     rec.timestamp_ms,
     rec.current_mA,
