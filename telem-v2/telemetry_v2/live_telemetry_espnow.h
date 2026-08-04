@@ -73,6 +73,7 @@ public:
     bool gpsValid,
     bool gpsUartActive,
     bool gpsTimeValid,
+    bool gpsRxOnGpio21,
     uint8_t gpsSatellites,
     int32_t latitudeE7,
     int32_t longitudeE7)
@@ -90,6 +91,7 @@ public:
     if (gpsValid) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_VALID;
     if (gpsUartActive) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE;
     if (gpsTimeValid) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_TIME_VALID;
+    if (gpsRxOnGpio21) packet.flags |= LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21;
     uint8_t encodedSatellites = gpsSatellites > 15 ? 15 : gpsSatellites;
     packet.flags |= encodedSatellites << LIVE_TELEMETRY_GPS_SATS_SHIFT;
     packet.packet_size = sizeof(packet);

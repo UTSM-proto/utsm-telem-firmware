@@ -305,8 +305,9 @@ void printGpsPacketStatus(const LiveTelemetryPacket &packet)
     LIVE_TELEMETRY_GPS_SATS_SHIFT;
 
   Serial.printf(
-    "GPS seq=%lu uart=%s sats=%u utc=%s fix=%s\n",
+    "GPS seq=%lu rx=GPIO%u uart=%s sats=%u utc=%s fix=%s\n",
     static_cast<unsigned long>(packet.sequence),
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21) ? 21 : 20,
     (packet.flags & LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE) ? "yes" : "no",
     satellites,
     (packet.flags & LIVE_TELEMETRY_FLAG_GPS_TIME_VALID) ? "yes" : "no",
@@ -327,6 +328,7 @@ LiveTelemetryPacket makeDummyPacket()
     ? LIVE_TELEMETRY_FLAG_GPS_VALID |
       LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE |
       LIVE_TELEMETRY_FLAG_GPS_TIME_VALID |
+      LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21 |
       (12 << LIVE_TELEMETRY_GPS_SATS_SHIFT)
     : 0;
   packet.packet_size = sizeof(packet);

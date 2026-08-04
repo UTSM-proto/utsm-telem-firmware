@@ -198,10 +198,11 @@ does not yet have a valid fix.
 When only the WROVER Serial Monitor is accessible, each real packet also shows:
 
 ```text
-GPS seq=12 uart=yes sats=7 utc=yes fix=yes
+GPS seq=12 rx=GPIO21 uart=yes sats=7 utc=yes fix=yes
 ```
 
 - `uart=no`: the C3 has received no NMEA characters; check GPS power/TX wiring.
+- `rx=GPIO21` or `rx=GPIO20`: the UART pin selected by automatic detection.
 - `uart=yes sats=0`: the module is communicating but has not acquired satellites.
 - `sats>0 fix=no`: keep the antenna stationary with a clear view of the sky.
 - `fix=yes`: the next LTE post includes latitude/longitude for the live map.

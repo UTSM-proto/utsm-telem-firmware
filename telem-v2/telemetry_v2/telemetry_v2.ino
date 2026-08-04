@@ -74,9 +74,12 @@ static const int SD_SCK  = 4;
 // wired to GPIO20 and its TX net is wired to GPIO21. UART roles must therefore
 // be crossed here so the C3 listens to module TX on GPIO21 and transmits to
 // module RX on GPIO20.
-static const int GPS_RX_PIN = 21;
-static const int GPS_TX_PIN = 20;
+static const int GPS_PCB_RX_PIN = 21;
+static const int GPS_PCB_TX_PIN = 20;
+static const int GPS_ALTERNATE_RX_PIN = 20;
+static const int GPS_ALTERNATE_TX_PIN = 21;
 static const uint32_t GPS_BAUD = 9600;
+static const uint32_t GPS_PIN_AUTODETECT_MS = 8000;
 
 // =========================
 // Beam-break speedometer
@@ -210,6 +213,10 @@ static const uint16_t THERMISTOR_OFFSET_CAL_SAMPLES = 64;
 // =========================
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
+int g_gpsRxPin = GPS_PCB_RX_PIN;
+int g_gpsTxPin = GPS_PCB_TX_PIN;
+bool g_gpsPinAutodetectComplete = false;
+uint32_t g_gpsPinAutodetectStartMs = 0;
 
 // =========================
 // Logging state
@@ -421,6 +428,30 @@ void serviceGps()
 {
   while (gpsSerial.available() > 0) {
     gps.encode(gpsSerial.read());
+  }
+
+  if (!g_gpsPinAutodetectComplete &&
+      (uint32_t)(millis() - g_gpsPinAutodetectStartMs) >=
+        GPS_PIN_AUTODETECT_MS) {
+    g_gpsPinAutodetectComplete = true;
+
+    if (gps.charsProcessed() < 10) {
+      g_gpsRxPin = GPS_ALTERNATE_RX_PIN;
+      g_gpsTxPin = GPS_ALTERNATE_TX_PIN;
+      gpsSerial.end();
+      delay(10);
+      gpsSerial.begin(
+        GPS_BAUD,
+        SERIAL_8N1,
+        g_gpsRxPin,
+        g_gpsTxPin
+      );
+      Serial.println(
+        "No GPS UART data on GPIO21; automatically trying RX GPIO20."
+      );
+    } else {
+      Serial.println("GPS UART detected on PCB RX GPIO21.");
+    }
   }
 }
 
@@ -1336,9 +1367,10 @@ void setup()
   gpsSerial.begin(
     GPS_BAUD,
     SERIAL_8N1,
-    GPS_RX_PIN,
-    GPS_TX_PIN
+    g_gpsRxPin,
+    g_gpsTxPin
   );
+  g_gpsPinAutodetectStartMs = millis();
 
   blinkLedFor(1000, 150);
 
@@ -1575,6 +1607,7 @@ void loop()
     rec.gps_location_valid != 0,
     gps.charsProcessed() >= 10,
     rec.gps_time_valid != 0,
+    g_gpsRxPin == GPS_PCB_RX_PIN,
     rec.gps_sats,
     rec.gps_lat_e7,
     rec.gps_long_e7
