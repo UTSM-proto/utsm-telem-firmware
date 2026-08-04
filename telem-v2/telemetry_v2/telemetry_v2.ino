@@ -16,8 +16,8 @@
     - Wheel speed from a beam-break sensor and 12 wheel spokes
     - GPS position, speed, altitude, HDOP, satellites, and UTC time
   Writes each recording session to an SD-card CSV.
-  Mirrors current, voltage, acceleration, and GPS at 1 Hz over ESP-NOW to the
-  vehicle's WROVER/A7670 LTE relay. Live forwarding never blocks SD logging.
+  Mirrors current, voltage, acceleration, and GPS every 5 seconds over ESP-NOW
+  to the vehicle's WROVER/A7670 LTE relay. Live forwarding never blocks SD.
 
   CSV filenames are derived directly from GPS UTC time:
       /YYYY-MM-DD-HH-MM.csv

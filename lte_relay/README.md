@@ -119,8 +119,8 @@ Quick-tunnel hostnames change whenever the tunnel is restarted.
 - Valid records are posted immediately.
 - Records received while LTE is unavailable are dropped from the live stream.
 - The original ESP32-C3 SD CSV is unaffected.
-- The logger broadcasts at 1 Hz to avoid overwhelming LTE with the full sensor
-  sample rate. Change `LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS` if required.
+- The logger broadcasts once every five seconds to conserve the vehicle SIM's
+  500 MB data allowance. SD still records at the full sensor sample rate.
 - TelemV2 sends valid GPS latitude/longitude with the live packet. The map
   activates automatically after the GPS obtains a fix.
 
@@ -187,7 +187,7 @@ This is the real end-to-end path:
    leave the laptop running the dashboard and tunnel.
 7. Wait through TelemV2 initialization. Its LED becomes solid when SD logging
    starts. Outdoors, wait for the live page map to receive a GPS position.
-8. The page should receive a new row about once per second. Move the car
+8. The page should receive a new row about once every five seconds. Move the car
    outdoors and the GPS marker/trail should move with the vehicle.
 
 The relay's serial success line is `LIVE seq=N delivered`, but serial access is

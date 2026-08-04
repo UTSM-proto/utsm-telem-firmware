@@ -14,9 +14,10 @@ static const uint8_t LIVE_TELEMETRY_BROADCAST_MAC[6] = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 };
 
-// SD retains every sample. LTE receives a best-effort 1 Hz mirror with no
-// persistent buffering, so a relay/network outage cannot block the logger.
-static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 1000;
+// SD retains every sample. LTE receives a best-effort update every 5 seconds
+// to conserve the vehicle SIM's 500 MB allowance. There is no persistent
+// buffering, so a relay/network outage cannot block the logger.
+static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 5000;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 
 class LiveTelemetryEspNowSender
@@ -54,8 +55,9 @@ public:
     _bootId = esp_random();
     _ready = true;
     Serial.printf(
-      "ESP-NOW live telemetry ready (broadcast, channel %u, 1 Hz)\n",
-      LIVE_TELEMETRY_ESPNOW_CHANNEL
+      "ESP-NOW live telemetry ready (broadcast, channel %u, every %lu ms)\n",
+      LIVE_TELEMETRY_ESPNOW_CHANNEL,
+      (unsigned long)LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS
     );
     return true;
   }

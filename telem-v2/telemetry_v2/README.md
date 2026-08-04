@@ -31,9 +31,10 @@ measurements can be compared during testing.
 
 ## Live LTE tracking
 
-While SD logging is active, TelemV2 broadcasts a best-effort 1 Hz mirror over
-ESP-NOW channel 1. The WROVER/A7670 relay in `lte_relay/` receives each packet
-and immediately posts it over LTE to the existing live dashboard. No UART
+While SD logging is active, TelemV2 broadcasts a best-effort update every five
+seconds over ESP-NOW channel 1. The WROVER/A7670 relay in `lte_relay/` receives
+each packet and immediately posts it over LTE to the existing live dashboard.
+The reduced rate conserves the vehicle SIM's 500 MB data allowance. No UART
 wires are required between the boards.
 
 The live packet contains current, voltage, acceleration, and valid GPS

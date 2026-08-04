@@ -29,6 +29,7 @@ static const int MODEM_RESET_PIN = 5;
 static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
 static const uint32_t MODEM_START_WAIT_MS = 15000;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
+static const uint32_t LTE_RECONNECT_INTERVAL_MS = 30000;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
@@ -175,9 +176,25 @@ bool connectLte()
     return false;
   }
 
+  String operatorName = modem.getOperator();
+  int16_t signalQuality = modem.getSignalQuality();
+  Serial.printf(
+    "Registered: operator='%s', signal CSQ=%d (99 means unknown)\n",
+    operatorName.c_str(),
+    signalQuality
+  );
+
   Serial.printf("Connecting APN '%s'...\n", LTE_APN);
   if (!modem.gprsConnect(LTE_APN, LTE_USER, LTE_PASSWORD)) {
     Serial.println("Packet-data connection failed");
+    Serial.printf("SIM status=%d, network connected=%s\n",
+                  (int)modem.getSimStatus(),
+                  modem.isNetworkConnected() ? "yes" : "no");
+    Serial.print("PDP context after failure: ");
+    Serial.println(modem.getLocalIP());
+    Serial.println(
+      "Check SIM activation/data in a phone, SIM PIN, APN, antenna, and power."
+    );
     return false;
   }
 
@@ -355,7 +372,7 @@ void setup()
 void loop()
 {
   if (!networkReady) {
-    if (millis() - lastNetworkAttemptMs >= 10000) {
+    if (millis() - lastNetworkAttemptMs >= LTE_RECONNECT_INTERVAL_MS) {
       lastNetworkAttemptMs = millis();
       networkReady = connectLte();
     }
