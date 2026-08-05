@@ -39,6 +39,7 @@ TinyGsm modem(SerialAT);
 // the pending one instead of waiting behind it in a FIFO.
 LiveTelemetryPacket latestPacket;
 volatile bool latestPacketAvailable = false;
+volatile uint32_t latestPacketReceivedMs = 0;
 volatile uint32_t supersededPackets = 0;
 portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -54,8 +55,11 @@ void enqueuePacket(const uint8_t *data, int length)
   if (!isValidLiveTelemetryPacket(packet)) return;
 
   portENTER_CRITICAL(&rxMux);
-  if (latestPacketAvailable) supersededPackets++;
+  if (latestPacketAvailable) {
+    supersededPackets = supersededPackets + 1;
+  }
   latestPacket = packet;
+  latestPacketReceivedMs = millis();
   latestPacketAvailable = true;
   portEXIT_CRITICAL(&rxMux);
 }
@@ -72,12 +76,13 @@ void onEspNowReceive(const uint8_t *, const uint8_t *data, int length)
 }
 #endif
 
-bool dequeuePacket(LiveTelemetryPacket &packet)
+bool dequeuePacket(LiveTelemetryPacket &packet, uint32_t &receivedMs)
 {
   bool available = false;
   portENTER_CRITICAL(&rxMux);
   if (latestPacketAvailable) {
     packet = latestPacket;
+    receivedMs = latestPacketReceivedMs;
     latestPacketAvailable = false;
     available = true;
   }
@@ -218,15 +223,30 @@ int parseHttpStatus(const String &actionLine)
 
 bool postJson(const String &json)
 {
-  // Clear a stale service from a previous failed request.
-  atCommand("+HTTPTERM", 2000);
-  if (!atCommand("+HTTPINIT")) return false;
+  // Clean up once after boot in case the ESP32 restarted while the modem kept
+  // a stale HTTP service. Normal requests already terminate at the end, so do
+  // not pay for a second redundant HTTPTERM before every following request.
+  static bool firstHttpRequest = true;
+  if (firstHttpRequest) {
+    atCommand("+HTTPTERM", 2000);
+    firstHttpRequest = false;
+  }
+
+  // If an earlier interrupted request did leave stale modem state, recover by
+  // terminating and retrying initialization once.
+  if (!atCommand("+HTTPINIT")) {
+    atCommand("+HTTPTERM", 2000);
+    if (!atCommand("+HTTPINIT")) return false;
+  }
   // A7670X selects HTTP versus HTTPS from the URL. HTTPSSL and the
   // HTTPPARA="CID" form are SIM7600-specific and return ERROR here.
-  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) return false;
-  if (!atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"")) return false;
-  if (!atCommand(String("+HTTPPARA=\"USERDATA\",\"X-Telemetry-Key: ") +
-                 TELEMETRY_API_KEY + "\"")) return false;
+  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"") ||
+      !atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"") ||
+      !atCommand(String("+HTTPPARA=\"USERDATA\",\"X-Telemetry-Key: ") +
+                 TELEMETRY_API_KEY + "\"")) {
+    atCommand("+HTTPTERM", 2000);
+    return false;
+  }
 
   modem.sendAT("+HTTPDATA=", json.length(), ",10000");
   if (modem.waitResponse(10000L, GF("DOWNLOAD"), GF("ERROR")) != 1) {
@@ -347,24 +367,28 @@ LiveTelemetryPacket makeDummyPacket()
   return packet;
 }
 
-bool sendLivePacket(const LiveTelemetryPacket &packet, const char *sourceLabel)
+bool sendLivePacket(const LiveTelemetryPacket &packet,
+                    const char *sourceLabel,
+                    uint32_t relayQueueWaitMs = 0)
 {
   String json = packetToJson(packet);
   uint32_t postStartedMs = millis();
   if (postJson(json)) {
     uint32_t postElapsedMs = millis() - postStartedMs;
-    Serial.printf("%s seq=%lu delivered in %lu ms json=%u B\n",
+    Serial.printf("%s seq=%lu delivered in %lu ms queue=%lu ms json=%u B\n",
                   sourceLabel,
                   static_cast<unsigned long>(packet.sequence),
                   static_cast<unsigned long>(postElapsedMs),
+                  static_cast<unsigned long>(relayQueueWaitMs),
                   static_cast<unsigned int>(json.length()));
     return true;
   }
 
-  Serial.printf("%s seq=%lu POST failed after %lu ms json=%u B\n",
+  Serial.printf("%s seq=%lu POST failed after %lu ms queue=%lu ms json=%u B\n",
                 sourceLabel,
                 static_cast<unsigned long>(packet.sequence),
                 static_cast<unsigned long>(millis() - postStartedMs),
+                static_cast<unsigned long>(relayQueueWaitMs),
                 static_cast<unsigned int>(json.length()));
   networkReady = false;
   return false;
@@ -419,7 +443,8 @@ void loop()
   }
 
   LiveTelemetryPacket packet;
-  if (!dequeuePacket(packet)) {
+  uint32_t packetReceivedMs = 0;
+  if (!dequeuePacket(packet, packetReceivedMs)) {
     delay(5);
     return;
   }
@@ -432,7 +457,7 @@ void loop()
     return;
   }
 
-  sendLivePacket(packet, "LIVE");
+  sendLivePacket(packet, "LIVE", millis() - packetReceivedMs);
 
   static uint32_t lastSupersededReport = 0;
   if (supersededPackets != lastSupersededReport) {
