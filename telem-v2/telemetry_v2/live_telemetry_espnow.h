@@ -14,10 +14,10 @@ static const uint8_t LIVE_TELEMETRY_BROADCAST_MAC[6] = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 };
 
-// SD retains every sample. LTE receives a best-effort update every second for
+// SD retains every sample. LTE receives a best-effort update every 500 ms for
 // a responsive dashboard. There is no persistent buffering, so a relay/network
 // outage cannot block the logger or replay stale records later.
-static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 1000;
+static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 500;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 
 class LiveTelemetryEspNowSender

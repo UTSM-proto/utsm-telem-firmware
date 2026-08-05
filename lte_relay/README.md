@@ -116,21 +116,51 @@ Quick-tunnel hostnames change whenever the tunnel is restarted.
 
 ## Prototype behavior
 
+> **Hardware status:** The throughput changes described below compile, but have
+> not yet been tested on the TelemV2 C3, WROVER/A7670, SD card, or live carrier.
+
 - Valid records are posted immediately.
 - Records received while LTE is unavailable are dropped from the live stream.
 - The original ESP32-C3 SD CSV is unaffected.
-- The logger broadcasts at most once per second. If LTE is slower than the
+- The logger broadcasts at most once every 500 ms. If LTE is slower than the
   incoming stream, the relay keeps only the newest pending packet so the live
   page catches up instead of displaying an old FIFO backlog.
-- The WROVER prints each LTE POST duration and JSON payload size. Use those
-  values to measure the carrier/modem's real sustainable rate and watch data
-  use against the vehicle SIM's 500 MB allowance; HTTP/TLS overhead is not
-  included in the printed JSON byte count.
+- The WROVER prints relay queue wait, LTE POST duration, and JSON payload size.
+  Use those values to measure freshness and the carrier/modem's real sustainable
+  rate, and watch data use against the vehicle SIM's 500 MB allowance; HTTP/TLS
+  overhead is not included in the printed JSON byte count.
+- After a one-time stale-service cleanup, the relay avoids issuing a redundant
+  `HTTPTERM` immediately before every `HTTPINIT`. A failed initialization still
+  performs cleanup and retries once.
 - SD still records at the full sensor sample rate. The TelemV2 logger uses the
   ADS1115's 860 SPS conversion mode while retaining 20-sample averaging and a
   separate open/write/close for every SD row.
 - TelemV2 sends valid GPS latitude/longitude with the live packet. The map
   activates automatically after the GPS obtains a fix.
+
+## Throughput analysis and test targets
+
+Two prior vehicle CSVs had median SD row intervals of 608 ms and 609 ms, about
+1.64 rows/second. The critical path was the 20-sample current/voltage average:
+40 ADS1115 conversions waited 10 ms each, plus 20 inter-sample delays of 3 ms,
+for about 460 ms before MPU sampling and file writes. Current `main` already
+uses 860 SPS conversions with a 2 ms wait and no redundant inter-sample delay,
+reducing that planned wait to about 80 ms while retaining all 20 samples.
+
+The first hardware target is at least 3 SD rows/second with stable current and
+voltage values. The theoretical estimate is about 4 rows/second, based on
+removing roughly 380 ms from the old 610 ms loop, but SD latency and sensor
+noise must be measured rather than assumed.
+
+The live target is the freshest packet the serialized modem can sustain, up to
+2 ESP-NOW packets/second. The server rate cannot exceed `1000 / POST_ms`; for
+example, a 1400 ms POST caps delivery near 0.7 rows/second. A low `queue=... ms`
+with skipped sequence numbers is expected: it proves old pending samples were
+replaced and the next POST used recent data.
+
+At two 240-byte JSON bodies per second, JSON bodies alone total about 1.73
+MB/hour. Real carrier usage is higher because this excludes IP, TCP, TLS, and
+HTTP overhead, so confirm usage through the carrier account during testing.
 
 ## Level 2: LTE-only dummy test
 
@@ -143,7 +173,8 @@ ESP32-C3 telemetry board is not required.
 3. Set `LTE_DUMMY_TEST_MODE = true`.
 4. Flash `lte_relay.ino` and open the serial monitor at 115200 baud.
 5. Expect `Mode: LEVEL 2 LTE DUMMY TEST`, an assigned LTE IP, HTTP status 202,
-   and repeating `DUMMY seq=N delivered` messages.
+   and repeating `DUMMY seq=N delivered in ... ms queue=... ms json=... B`
+   messages.
 6. Return `LTE_DUMMY_TEST_MODE` to `false` before the ESP-NOW integration test.
 
 ## Level 3: full-path ESP-NOW dummy test
@@ -157,7 +188,8 @@ without requiring live sensors.
    SuperMini.
 4. Open both serial monitors at 115200 if two USB ports are available.
 5. The C3 prints `C3 ESP-NOW queued seq=N`; the relay prints
-   `LIVE seq=N delivered`; the dashboard updates with the same sequence.
+   `LIVE seq=N delivered in ... ms queue=... ms json=... B`; the dashboard
+   updates with the same sequence.
 
 Expected relay output:
 
@@ -166,7 +198,7 @@ Mode: LIVE ESP-NOW RELAY
 Relay ESP-NOW channel: 1
 LTE connected; IP: ...
 Dashboard POST status=202
-LIVE seq=0 delivered
+LIVE seq=0 delivered in 1430 ms queue=4 ms json=241 B
 ```
 
 Expected C3 output:
@@ -195,11 +227,12 @@ This is the real end-to-end path:
    leave the laptop running the dashboard and tunnel.
 7. Wait through TelemV2 initialization. Its LED becomes solid when SD logging
    starts. Outdoors, wait for the live page map to receive a GPS position.
-8. The page targets a new row about once per second. Actual rate is capped by
+8. The page targets up to two new rows per second. Actual rate is capped by
    the measured LTE POST duration printed by the relay. Move the car outdoors
    and the GPS marker/trail should move with the vehicle.
 
-The relay's serial success line is `LIVE seq=N delivered`, but serial access is
+The relay's serial success line is
+`LIVE seq=N delivered in ... ms queue=... ms json=... B`, but serial access is
 not required in the vehicle: increasing sequence numbers on `/live` prove the
 complete path. If rows update without a map marker, LTE is working but the GPS
 does not yet have a valid fix.
