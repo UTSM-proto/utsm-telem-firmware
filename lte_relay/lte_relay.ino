@@ -29,17 +29,17 @@ static const int MODEM_RESET_PIN = 5;
 static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
 static const uint32_t MODEM_START_WAIT_MS = 15000;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
+static const uint32_t LTE_RECONNECT_INTERVAL_MS = 30000;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
 
-// This small queue only transfers records safely out of the ESP-NOW callback.
-// It is not persistent outage buffering; overflow drops the oldest live row.
-static const size_t RX_QUEUE_SIZE = 12;
-LiveTelemetryPacket rxQueue[RX_QUEUE_SIZE];
-volatile size_t rxHead = 0;
-volatile size_t rxTail = 0;
-volatile uint32_t droppedPackets = 0;
+// A live dashboard values freshness over delivery of old rows. Keep only the
+// newest packet while an LTE POST is in progress; a newer arrival supersedes
+// the pending one instead of waiting behind it in a FIFO.
+LiveTelemetryPacket latestPacket;
+volatile bool latestPacketAvailable = false;
+volatile uint32_t supersededPackets = 0;
 portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 
 uint32_t lastNetworkAttemptMs = 0;
@@ -54,13 +54,9 @@ void enqueuePacket(const uint8_t *data, int length)
   if (!isValidLiveTelemetryPacket(packet)) return;
 
   portENTER_CRITICAL(&rxMux);
-  size_t next = (rxHead + 1) % RX_QUEUE_SIZE;
-  if (next == rxTail) {
-    rxTail = (rxTail + 1) % RX_QUEUE_SIZE;
-    droppedPackets++;
-  }
-  rxQueue[rxHead] = packet;
-  rxHead = next;
+  if (latestPacketAvailable) supersededPackets++;
+  latestPacket = packet;
+  latestPacketAvailable = true;
   portEXIT_CRITICAL(&rxMux);
 }
 
@@ -80,9 +76,9 @@ bool dequeuePacket(LiveTelemetryPacket &packet)
 {
   bool available = false;
   portENTER_CRITICAL(&rxMux);
-  if (rxTail != rxHead) {
-    packet = rxQueue[rxTail];
-    rxTail = (rxTail + 1) % RX_QUEUE_SIZE;
+  if (latestPacketAvailable) {
+    packet = latestPacket;
+    latestPacketAvailable = false;
     available = true;
   }
   portEXIT_CRITICAL(&rxMux);
@@ -175,9 +171,25 @@ bool connectLte()
     return false;
   }
 
+  String operatorName = modem.getOperator();
+  int16_t signalQuality = modem.getSignalQuality();
+  Serial.printf(
+    "Registered: operator='%s', signal CSQ=%d (99 means unknown)\n",
+    operatorName.c_str(),
+    signalQuality
+  );
+
   Serial.printf("Connecting APN '%s'...\n", LTE_APN);
   if (!modem.gprsConnect(LTE_APN, LTE_USER, LTE_PASSWORD)) {
     Serial.println("Packet-data connection failed");
+    Serial.printf("SIM status=%d, network connected=%s\n",
+                  (int)modem.getSimStatus(),
+                  modem.isNetworkConnected() ? "yes" : "no");
+    Serial.print("PDP context after failure: ");
+    Serial.println(modem.getLocalIP());
+    Serial.println(
+      "Check SIM activation/data in a phone, SIM PIN, APN, antenna, and power."
+    );
     return false;
   }
 
@@ -281,6 +293,25 @@ String packetToJson(const LiveTelemetryPacket &packet)
   return json;
 }
 
+void printGpsPacketStatus(const LiveTelemetryPacket &packet)
+{
+  uint8_t satellites =
+    (packet.flags & LIVE_TELEMETRY_GPS_SATS_MASK) >>
+    LIVE_TELEMETRY_GPS_SATS_SHIFT;
+
+  Serial.printf(
+    "GPS seq=%lu rx=GPIO%u baud=%lu bytes=%lu nmea=%s sats=%u utc=%s fix=%s\n",
+    static_cast<unsigned long>(packet.sequence),
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21) ? 21 : 20,
+    static_cast<unsigned long>(packet.gps_uart_baud),
+    static_cast<unsigned long>(packet.gps_uart_bytes),
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE) ? "yes" : "no",
+    satellites,
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_TIME_VALID) ? "yes" : "no",
+    (packet.flags & LIVE_TELEMETRY_FLAG_GPS_VALID) ? "yes" : "no"
+  );
+}
+
 LiveTelemetryPacket makeDummyPacket()
 {
   static uint32_t dummyBootId = esp_random();
@@ -290,7 +321,13 @@ LiveTelemetryPacket makeDummyPacket()
   LiveTelemetryPacket packet = {};
   packet.magic = LIVE_TELEMETRY_MAGIC;
   packet.version = LIVE_TELEMETRY_VERSION;
-  packet.flags = LTE_DUMMY_INCLUDE_GPS ? LIVE_TELEMETRY_FLAG_GPS_VALID : 0;
+  packet.flags = LTE_DUMMY_INCLUDE_GPS
+    ? LIVE_TELEMETRY_FLAG_GPS_VALID |
+      LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE |
+      LIVE_TELEMETRY_FLAG_GPS_TIME_VALID |
+      LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21 |
+      (12 << LIVE_TELEMETRY_GPS_SATS_SHIFT)
+    : 0;
   packet.packet_size = sizeof(packet);
   packet.boot_id = dummyBootId;
   packet.sequence = dummySequence++;
@@ -301,6 +338,8 @@ LiveTelemetryPacket makeDummyPacket()
   packet.ay_x100 = static_cast<int16_t>(55.0f * cosf(phase * 1.3f));
   packet.az_x100 = 981;
   packet.amag_x100 = static_cast<uint16_t>(985.0f + 20.0f * sinf(phase));
+  packet.gps_uart_baud = 9600;
+  packet.gps_uart_bytes = dummySequence * 960;
 
   // Small fake loop near Indianapolis so the Level 2 test exercises the map.
   packet.latitude_e7 = 397991700 + static_cast<int32_t>(4500.0f * sinf(phase));
@@ -311,16 +350,22 @@ LiveTelemetryPacket makeDummyPacket()
 bool sendLivePacket(const LiveTelemetryPacket &packet, const char *sourceLabel)
 {
   String json = packetToJson(packet);
+  uint32_t postStartedMs = millis();
   if (postJson(json)) {
-    Serial.printf("%s seq=%lu delivered\n",
+    uint32_t postElapsedMs = millis() - postStartedMs;
+    Serial.printf("%s seq=%lu delivered in %lu ms json=%u B\n",
                   sourceLabel,
-                  static_cast<unsigned long>(packet.sequence));
+                  static_cast<unsigned long>(packet.sequence),
+                  static_cast<unsigned long>(postElapsedMs),
+                  static_cast<unsigned int>(json.length()));
     return true;
   }
 
-  Serial.printf("%s seq=%lu POST failed\n",
+  Serial.printf("%s seq=%lu POST failed after %lu ms json=%u B\n",
                 sourceLabel,
-                static_cast<unsigned long>(packet.sequence));
+                static_cast<unsigned long>(packet.sequence),
+                static_cast<unsigned long>(millis() - postStartedMs),
+                static_cast<unsigned int>(json.length()));
   networkReady = false;
   return false;
 }
@@ -355,7 +400,7 @@ void setup()
 void loop()
 {
   if (!networkReady) {
-    if (millis() - lastNetworkAttemptMs >= 10000) {
+    if (millis() - lastNetworkAttemptMs >= LTE_RECONNECT_INTERVAL_MS) {
       lastNetworkAttemptMs = millis();
       networkReady = connectLte();
     }
@@ -379,6 +424,8 @@ void loop()
     return;
   }
 
+  printGpsPacketStatus(packet);
+
   if (!networkReady) {
     Serial.printf("Dropping live seq=%lu while LTE is offline\n",
                   static_cast<unsigned long>(packet.sequence));
@@ -387,10 +434,10 @@ void loop()
 
   sendLivePacket(packet, "LIVE");
 
-  static uint32_t lastDropReport = 0;
-  if (droppedPackets != lastDropReport) {
-    lastDropReport = droppedPackets;
-    Serial.printf("ESP-NOW transit queue drops=%lu\n",
-                  static_cast<unsigned long>(lastDropReport));
+  static uint32_t lastSupersededReport = 0;
+  if (supersededPackets != lastSupersededReport) {
+    lastSupersededReport = supersededPackets;
+    Serial.printf("ESP-NOW pending packets superseded=%lu\n",
+                  static_cast<unsigned long>(lastSupersededReport));
   }
 }

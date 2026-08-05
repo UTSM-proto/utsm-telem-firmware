@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 
-// Packet v1 mirror used by the standalone relay sketch. Keep this definition
-// byte-for-byte compatible with telem-v1/live_telemetry_packet.h.
+// Shared over-the-air contract between the ESP32-C3 logger and LTE relay.
+// Keep this packed and versioned so either board rejects incompatible data.
 static const uint32_t LIVE_TELEMETRY_MAGIC = 0x5554534DUL;  // "UTSM"
 static const uint8_t LIVE_TELEMETRY_VERSION = 2;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_VALID = 0x01;
@@ -34,8 +34,10 @@ struct LiveTelemetryPacket
   uint32_t gps_uart_bytes;
 } __attribute__((packed));
 
-static_assert(sizeof(LiveTelemetryPacket) == 50, "Live telemetry packet layout changed");
-static_assert(sizeof(LiveTelemetryPacket) <= 250, "ESP-NOW packet is too large");
+static_assert(sizeof(LiveTelemetryPacket) == 50,
+              "Live telemetry packet layout changed");
+static_assert(sizeof(LiveTelemetryPacket) <= 250,
+              "ESP-NOW packet is too large");
 
 inline bool isValidLiveTelemetryPacket(const LiveTelemetryPacket &packet)
 {

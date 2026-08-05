@@ -29,6 +29,38 @@ The CSV contains `wheel_speed_valid`, `wheel_speed_kmph`, `wheel_rpm`, and a
 cumulative `wheel_spoke_count`. GPS speed remains a separate field so the two
 measurements can be compared during testing.
 
+## Live LTE tracking
+
+While SD logging is active, TelemV2 broadcasts a best-effort update every five
+seconds over ESP-NOW channel 1. The WROVER/A7670 relay in `lte_relay/` receives
+each packet and immediately posts it over LTE to the existing live dashboard.
+The reduced rate conserves the vehicle SIM's 500 MB data allowance. No UART
+wires are required between the boards.
+
+The live packet contains current, voltage, acceleration, and valid GPS
+latitude/longitude. The dashboard map begins tracking as soon as the GPS has a
+fix. SD remains the complete source of truth: ESP-NOW, relay, LTE, or server
+failure never stops or delays the CSV logger, and missed live records are not
+backfilled.
+
+The vehicle wiring connects the GPS module's TX pin to C3 GPIO20 and its RX pin
+to C3 GPIO21. The logger only needs to receive GPS data, so it leaves UART TX
+disconnected and first listens on GPIO20 at the normal NEO-M8N rate of 9600
+baud. If it does not receive a checksum-valid NMEA sentence, it continuously
+tests GPIO21 and GPIO20 at 9600, 38400, 115200, and 4800 baud until it locks.
+The C3 serial monitor prints each attempted pin/rate and its raw byte count.
+On ESP32-C3, hardware UART0 also defaults to GPIO20/GPIO21. The firmware does
+not initialize that console unless **USB CDC On Boot** is enabled, preventing
+`Serial.begin()` and GPS UART1 from competing for the same physical pins. GPS
+probe results are available from the WROVER relay even without a C3 monitor.
+
+`raw bytes=0` for every attempt means this is an electrical path problem, not
+a satellite-fix problem: verify 3.3 V and ground at the GPS header, then check
+continuity from the module's TX pin to C3 GPIO20. Raw bytes without an NMEA
+lock indicate a non-NMEA/proprietary configuration or corrupted UART signal.
+
+For the full setup and demo sequence, see `../../lte_relay/README.md`.
+
 ## Indoor operation without GPS
 
 At startup the logger waits up to 30 seconds for valid GPS UTC time. If GPS is

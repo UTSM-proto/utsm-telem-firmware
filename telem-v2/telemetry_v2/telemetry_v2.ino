@@ -6,6 +6,7 @@
     - Install "esp32 by Espressif Systems" in Boards Manager
     - Install "TinyGPSPlus by Mikal Hart" in Library Manager
     - Wire, LittleFS, FS, SD, and SPI are included with the ESP32 board core
+    - WiFi and ESP-NOW are included with the ESP32 board core
 
   Collects:
     - Current from ADS1115 AIN0
@@ -15,6 +16,8 @@
     - Wheel speed from a beam-break sensor and 12 wheel spokes
     - GPS position, speed, altitude, HDOP, satellites, and UTC time
   Writes each recording session to an SD-card CSV.
+  Mirrors current, voltage, acceleration, and GPS every 1 second over ESP-NOW
+  to the vehicle's WROVER/A7670 LTE relay. Live forwarding never blocks SD.
 
   CSV filenames are derived directly from GPS UTC time:
       /YYYY-MM-DD-HH-MM.csv
@@ -38,8 +41,8 @@
     SD MISO       GPIO5
     SD MOSI       GPIO6
     SD CS         GPIO7
-    GPS RX        GPIO20 (connect to GPS TX)
-    GPS TX        GPIO21 (connect to GPS RX)
+    GPS RX        GPIO20 (connected to GPS module TX)
+    GPS TX        unused (GPS module RX is connected to GPIO21)
 */
 
 #include <Arduino.h>
@@ -51,6 +54,7 @@
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
+#include "live_telemetry_espnow.h"
 
 // =========================
 // Pin mapping
@@ -66,9 +70,36 @@ static const int SD_MOSI = 6;
 static const int SD_MISO = 5;
 static const int SD_SCK  = 4;
 
-static const int GPS_RX_PIN = 20;
-static const int GPS_TX_PIN = 21;
+// Confirmed vehicle wiring: GPS module TX is connected to C3 GPIO20 and GPS
+// module RX is connected to C3 GPIO21. The logger only receives, so GPIO20 is
+// the primary UART RX candidate and GPIO21 is retained as a diagnostic fallback.
+static const int GPS_PRIMARY_RX_PIN = 20;
+static const int GPS_ALTERNATE_RX_PIN = 21;
 static const uint32_t GPS_BAUD = 9600;
+static const uint32_t GPS_UART_PROBE_MS = 3000;
+
+// The logger never sends configuration commands to the GPS, so UART TX is
+// intentionally left disconnected. This lets detection listen on either PCB
+// trace without ever driving against the GPS module's TX output.
+static const int GPS_UART_TX_UNUSED = -1;
+
+struct GpsUartCandidate {
+  int rxPin;
+  uint32_t baud;
+};
+
+static const GpsUartCandidate GPS_UART_CANDIDATES[] = {
+  {GPS_PRIMARY_RX_PIN, 9600},
+  {GPS_ALTERNATE_RX_PIN, 9600},
+  {GPS_PRIMARY_RX_PIN, 38400},
+  {GPS_ALTERNATE_RX_PIN, 38400},
+  {GPS_PRIMARY_RX_PIN, 115200},
+  {GPS_ALTERNATE_RX_PIN, 115200},
+  {GPS_PRIMARY_RX_PIN, 4800},
+  {GPS_ALTERNATE_RX_PIN, 4800},
+};
+static const size_t GPS_UART_CANDIDATE_COUNT =
+  sizeof(GPS_UART_CANDIDATES) / sizeof(GPS_UART_CANDIDATES[0]);
 
 // =========================
 // Beam-break speedometer
@@ -111,7 +142,6 @@ static const uint8_t MPU6050_ADDR = 0x68;
 // Sampling constants
 // =========================
 #define CURRENT_NUM_SAMPLES  20
-#define CURRENT_SAMPLE_DELAY 3
 
 #define MPU_NUM_SAMPLES      20
 #define MPU_SAMPLE_DELAY     3
@@ -132,28 +162,32 @@ static const uint32_t GPS_DIAGNOSTIC_INTERVAL_MS = 1000;
 #define ADS1115_CONFIG_MUX_AIN2_GND 0x6000
 #define ADS1115_CONFIG_PGA_4V096    0x0200
 #define ADS1115_CONFIG_MODE_SINGLE  0x0100
-#define ADS1115_CONFIG_DR_128SPS    0x0080
+#define ADS1115_CONFIG_DR_860SPS    0x00E0
 #define ADS1115_CONFIG_COMP_DISABLE 0x0003
+
+// At 860 samples/second a single conversion takes about 1.2 ms. Waiting 2 ms
+// retains margin without the old fixed 10 ms delay on every channel read.
+static const uint32_t ADS1115_CONVERSION_WAIT_MS = 2;
 
 #define ADS1115_CONFIG_WORD_AIN0 (ADS1115_CONFIG_OS_SINGLE     | \
                                   ADS1115_CONFIG_MUX_AIN0_GND  | \
                                   ADS1115_CONFIG_PGA_4V096     | \
                                   ADS1115_CONFIG_MODE_SINGLE   | \
-                                  ADS1115_CONFIG_DR_128SPS     | \
+                                  ADS1115_CONFIG_DR_860SPS     | \
                                   ADS1115_CONFIG_COMP_DISABLE)
 
 #define ADS1115_CONFIG_WORD_AIN1 (ADS1115_CONFIG_OS_SINGLE     | \
                                   ADS1115_CONFIG_MUX_AIN1_GND  | \
                                   ADS1115_CONFIG_PGA_4V096     | \
                                   ADS1115_CONFIG_MODE_SINGLE   | \
-                                  ADS1115_CONFIG_DR_128SPS     | \
+                                  ADS1115_CONFIG_DR_860SPS     | \
                                   ADS1115_CONFIG_COMP_DISABLE)
 
 #define ADS1115_CONFIG_WORD_AIN2 (ADS1115_CONFIG_OS_SINGLE     | \
                                   ADS1115_CONFIG_MUX_AIN2_GND  | \
                                   ADS1115_CONFIG_PGA_4V096     | \
                                   ADS1115_CONFIG_MODE_SINGLE   | \
-                                  ADS1115_CONFIG_DR_128SPS     | \
+                                  ADS1115_CONFIG_DR_860SPS     | \
                                   ADS1115_CONFIG_COMP_DISABLE)
 
 static const float ADS1115_LSB_VOLTS = 4.096f / 32768.0f;
@@ -202,6 +236,14 @@ static const uint16_t THERMISTOR_OFFSET_CAL_SAMPLES = 64;
 // =========================
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
+int g_gpsRxPin = GPS_PRIMARY_RX_PIN;
+uint32_t g_gpsBaud = GPS_BAUD;
+size_t g_gpsUartCandidateIndex = 0;
+bool g_gpsUartLocked = false;
+uint32_t g_gpsUartProbeStartMs = 0;
+uint32_t g_gpsUartByteCount = 0;
+uint32_t g_gpsUartProbeStartByteCount = 0;
+uint32_t g_gpsUartProbeStartPassedChecksum = 0;
 
 // =========================
 // Logging state
@@ -212,6 +254,7 @@ uint16_t g_sdLogIndex = 0;
 
 bool g_sdReady = false;
 bool g_loggingEnabled = false;
+LiveTelemetryEspNowSender g_liveTelemetry;
 
 // The record layout includes wheel-speed fields, so use a new backup filename
 // instead of interpreting older binary records with the new structure.
@@ -408,10 +451,64 @@ void updateWheelSpeed()
 // =========================
 // GPS helpers
 // =========================
+void startGpsUartCandidate(size_t candidateIndex)
+{
+  const GpsUartCandidate &candidate = GPS_UART_CANDIDATES[candidateIndex];
+
+  gpsSerial.end();
+  delay(10);
+
+  g_gpsRxPin = candidate.rxPin;
+  g_gpsBaud = candidate.baud;
+  gpsSerial.begin(
+    g_gpsBaud,
+    SERIAL_8N1,
+    g_gpsRxPin,
+    GPS_UART_TX_UNUSED
+  );
+  g_gpsUartProbeStartMs = millis();
+  g_gpsUartProbeStartByteCount = g_gpsUartByteCount;
+  g_gpsUartProbeStartPassedChecksum = gps.passedChecksum();
+
+  Serial.printf(
+    "GPS UART probe: RX GPIO%d at %lu baud.\n",
+    g_gpsRxPin,
+    (unsigned long)g_gpsBaud
+  );
+}
+
 void serviceGps()
 {
   while (gpsSerial.available() > 0) {
+    ++g_gpsUartByteCount;
     gps.encode(gpsSerial.read());
+  }
+
+  if (g_gpsUartLocked) {
+    return;
+  }
+
+  if (gps.passedChecksum() > g_gpsUartProbeStartPassedChecksum) {
+    g_gpsUartLocked = true;
+    Serial.printf(
+      "GPS NMEA locked: RX GPIO%d at %lu baud, bytes=%lu.\n",
+      g_gpsRxPin,
+      (unsigned long)g_gpsBaud,
+      (unsigned long)(g_gpsUartByteCount - g_gpsUartProbeStartByteCount)
+    );
+    return;
+  }
+
+  if ((uint32_t)(millis() - g_gpsUartProbeStartMs) >= GPS_UART_PROBE_MS) {
+    Serial.printf(
+      "No valid GPS NMEA on RX GPIO%d at %lu baud (raw bytes=%lu).\n",
+      g_gpsRxPin,
+      (unsigned long)g_gpsBaud,
+      (unsigned long)(g_gpsUartByteCount - g_gpsUartProbeStartByteCount)
+    );
+    g_gpsUartCandidateIndex =
+      (g_gpsUartCandidateIndex + 1) % GPS_UART_CANDIDATE_COUNT;
+    startGpsUartCandidate(g_gpsUartCandidateIndex);
   }
 }
 
@@ -432,8 +529,14 @@ void printGpsDiagnosticIfNeeded()
 
   lastGpsDiagnosticMs = now;
 
-  if (gps.charsProcessed() < 10) {
-    Serial.println("ERROR: No GPS data received. Check GPS TX->GPIO20, GPS RX->GPIO21, power, and baud rate.");
+  if (!g_gpsUartLocked) {
+    Serial.printf(
+      "GPS SEARCH: RX GPIO%d, %lu baud, total raw bytes=%lu. "
+      "Vehicle wiring expects GPS TX on GPIO20.\n",
+      g_gpsRxPin,
+      (unsigned long)g_gpsBaud,
+      (unsigned long)g_gpsUartByteCount
+    );
   }
 }
 
@@ -660,7 +763,7 @@ bool ads1115ReadRaw(uint16_t configWord, int16_t &raw)
     return false;
   }
 
-  delay(10);
+  delay(ADS1115_CONVERSION_WAIT_MS);
   serviceGps();
 
   uint8_t rx[2];
@@ -720,7 +823,6 @@ bool adc16ReadAverageCurrent(float &avgCurrentA, float &avgVoltageV, int16_t &av
     }
 
     serviceGps();
-    delay(CURRENT_SAMPLE_DELAY);
   }
 
   if (validSamples == 0) {
@@ -1317,19 +1419,20 @@ void handleSerialCommands()
 // =========================
 void setup()
 {
+#if ARDUINO_USB_CDC_ON_BOOT
+  // On ESP32-C3, hardware UART0 defaults to GPIO20/GPIO21, the same pins used
+  // by the GPS connector. Only start the local console when Serial is routed
+  // through native USB CDC so UART0 cannot interfere with GPS reception.
   Serial.begin(115200);
+#endif
   delay(1000);
 
   pinMode(LED_PIN, OUTPUT);
   setLed(false);
 
-  // Start GPS before lengthy initialization so GPS data is parsed throughout.
-  gpsSerial.begin(
-    GPS_BAUD,
-    SERIAL_8N1,
-    GPS_RX_PIN,
-    GPS_TX_PIN
-  );
+  // Start GPS detection before lengthy initialization so every candidate is
+  // serviced throughout setup as well as during normal logging.
+  startGpsUartCandidate(g_gpsUartCandidateIndex);
 
   blinkLedFor(1000, 150);
 
@@ -1365,6 +1468,10 @@ void setup()
     (unsigned long)SPEED_STATE_DEBOUNCE_US,
     (unsigned long)SPEED_MIN_PULSE_INTERVAL_US
   );
+
+  // Live telemetry is best-effort. Failure here is intentionally non-fatal so
+  // the SD logger remains fully usable without the relay.
+  g_liveTelemetry.begin();
 
   g_sdReady = initSDCard();
   if (!g_sdReady) {
@@ -1548,6 +1655,27 @@ void loop()
     Serial.println("SD write failed.");
     fatalFault(7, "SD log write failed");
   }
+
+  // Mirror a throttled subset of this exact SD record to the WROVER LTE relay.
+  // GPS is omitted from the packet until TinyGPSPlus reports a valid fix.
+  g_liveTelemetry.send(
+    rec.timestamp_ms,
+    rec.current_mA,
+    rec.voltage_mV,
+    rec.accel_x_mps2_x100,
+    rec.accel_y_mps2_x100,
+    rec.accel_z_mps2_x100,
+    rec.accel_mag_mps2_x100,
+    rec.gps_location_valid != 0,
+    g_gpsUartLocked,
+    rec.gps_time_valid != 0,
+    g_gpsRxPin == 21,
+    rec.gps_sats,
+    rec.gps_lat_e7,
+    rec.gps_long_e7,
+    g_gpsBaud,
+    g_gpsUartByteCount
+  );
 
   delay(20);
 }
