@@ -131,6 +131,8 @@ Quick-tunnel hostnames change whenever the tunnel is restarted.
   separate open/write/close for every SD row.
 - TelemV2 sends valid GPS latitude/longitude with the live packet. The map
   activates automatically after the GPS obtains a fix.
+- TelemV2 sends beam-break `wheel_speed_kph` and its validity state. A valid
+  stopped wheel is sent as `0.00`; an uninitialized sensor is sent as `null`.
 
 ## Level 2: LTE-only dummy test
 
@@ -143,7 +145,8 @@ ESP32-C3 telemetry board is not required.
 3. Set `LTE_DUMMY_TEST_MODE = true`.
 4. Flash `lte_relay.ino` and open the serial monitor at 115200 baud.
 5. Expect `Mode: LEVEL 2 LTE DUMMY TEST`, an assigned LTE IP, HTTP status 202,
-   and repeating `DUMMY seq=N delivered` messages.
+   repeating `DUMMY seq=N delivered` messages, and changing speed on the live
+   dashboard.
 6. Return `LTE_DUMMY_TEST_MODE` to `false` before the ESP-NOW integration test.
 
 ## Level 3: full-path ESP-NOW dummy test

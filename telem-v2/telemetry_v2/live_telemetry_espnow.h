@@ -70,6 +70,8 @@ public:
     int16_t ayX100,
     int16_t azX100,
     uint16_t amagX100,
+    bool wheelSpeedValid,
+    uint16_t wheelSpeedKmphX100,
     bool gpsValid,
     bool gpsUartActive,
     bool gpsTimeValid,
@@ -106,6 +108,10 @@ public:
     packet.ay_x100 = ayX100;
     packet.az_x100 = azX100;
     packet.amag_x100 = amagX100;
+    packet.wheel_speed_valid = wheelSpeedValid ? 1 : 0;
+    packet.wheel_speed_kmph_x100 = wheelSpeedValid
+                                       ? wheelSpeedKmphX100
+                                       : 0;
     packet.latitude_e7 = latitudeE7;
     packet.longitude_e7 = longitudeE7;
     packet.gps_uart_baud = gpsUartBaud;

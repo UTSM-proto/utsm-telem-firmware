@@ -1666,6 +1666,8 @@ void loop()
     rec.accel_y_mps2_x100,
     rec.accel_z_mps2_x100,
     rec.accel_mag_mps2_x100,
+    rec.wheel_speed_valid != 0,
+    (uint16_t)min(rec.wheel_speed_kmph_x100, (uint32_t)UINT16_MAX),
     rec.gps_location_valid != 0,
     g_gpsUartLocked,
     rec.gps_time_valid != 0,

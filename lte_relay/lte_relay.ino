@@ -282,6 +282,14 @@ String packetToJson(const LiveTelemetryPacket &packet)
   json += packet.az_x100;
   json += ",\"amag_x100\":";
   json += packet.amag_x100;
+  json += ",\"wheel_speed_valid\":";
+  json += packet.wheel_speed_valid ? "true" : "false";
+  json += ",\"wheel_speed_kph\":";
+  if (packet.wheel_speed_valid) {
+    json += String(packet.wheel_speed_kmph_x100 / 100.0f, 2);
+  } else {
+    json += "null";
+  }
 
   if (packet.flags & LIVE_TELEMETRY_FLAG_GPS_VALID) {
     json += ",\"latitude\":";
@@ -338,6 +346,9 @@ LiveTelemetryPacket makeDummyPacket()
   packet.ay_x100 = static_cast<int16_t>(55.0f * cosf(phase * 1.3f));
   packet.az_x100 = 981;
   packet.amag_x100 = static_cast<uint16_t>(985.0f + 20.0f * sinf(phase));
+  packet.wheel_speed_valid = 1;
+  packet.wheel_speed_kmph_x100 =
+    static_cast<uint16_t>(1800.0f + 900.0f * (1.0f + sinf(phase)));
   packet.gps_uart_baud = 9600;
   packet.gps_uart_bytes = dummySequence * 960;
 

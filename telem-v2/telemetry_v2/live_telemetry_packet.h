@@ -5,7 +5,7 @@
 // Shared over-the-air contract between the ESP32-C3 logger and LTE relay.
 // Keep this packed and versioned so either board rejects incompatible data.
 static const uint32_t LIVE_TELEMETRY_MAGIC = 0x5554534DUL;  // "UTSM"
-static const uint8_t LIVE_TELEMETRY_VERSION = 2;
+static const uint8_t LIVE_TELEMETRY_VERSION = 3;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_VALID = 0x01;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE = 0x02;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_TIME_VALID = 0x04;
@@ -32,9 +32,12 @@ struct LiveTelemetryPacket
   int32_t longitude_e7;
   uint32_t gps_uart_baud;
   uint32_t gps_uart_bytes;
+  uint16_t wheel_speed_kmph_x100;
+  uint8_t wheel_speed_valid;
+  uint8_t reserved;
 } __attribute__((packed));
 
-static_assert(sizeof(LiveTelemetryPacket) == 50,
+static_assert(sizeof(LiveTelemetryPacket) == 54,
               "Live telemetry packet layout changed");
 static_assert(sizeof(LiveTelemetryPacket) <= 250,
               "ESP-NOW packet is too large");

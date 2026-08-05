@@ -23,7 +23,11 @@ LiveTelemetryPacket makeDummyPacket(uint32_t now)
   LiveTelemetryPacket packet = {};
   packet.magic = LIVE_TELEMETRY_MAGIC;
   packet.version = LIVE_TELEMETRY_VERSION;
-  packet.flags = LIVE_TELEMETRY_FLAG_GPS_VALID;
+  packet.flags = LIVE_TELEMETRY_FLAG_GPS_VALID |
+                 LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE |
+                 LIVE_TELEMETRY_FLAG_GPS_TIME_VALID |
+                 LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21 |
+                 (12 << LIVE_TELEMETRY_GPS_SATS_SHIFT);
   packet.packet_size = sizeof(packet);
   packet.boot_id = bootId;
   packet.sequence = sequence++;
@@ -36,6 +40,11 @@ LiveTelemetryPacket makeDummyPacket(uint32_t now)
   packet.ay_x100 = static_cast<int16_t>(65.0f * cosf(phase * 1.3f));
   packet.az_x100 = 981;
   packet.amag_x100 = static_cast<uint16_t>(988.0f + 24.0f * sinf(phase));
+  packet.wheel_speed_valid = 1;
+  packet.wheel_speed_kmph_x100 =
+    static_cast<uint16_t>(1800.0f + 900.0f * (1.0f + sinf(phase)));
+  packet.gps_uart_baud = 9600;
+  packet.gps_uart_bytes = sequence * 1920;
 
   // Small fake lap around the existing dashboard demo location.
   packet.latitude_e7 = 397991700 + static_cast<int32_t>(4500.0f * sinf(phase));
@@ -96,10 +105,11 @@ void loop()
     sizeof(packet));
 
   if (result == ESP_OK) {
-    Serial.printf("C3 ESP-NOW queued seq=%lu I=%d mA V=%ld mV\n",
+    Serial.printf("C3 ESP-NOW queued seq=%lu I=%d mA V=%ld mV speed=%.2f km/h\n",
                   static_cast<unsigned long>(packet.sequence),
                   packet.current_mA,
-                  static_cast<long>(packet.voltage_mV));
+                  static_cast<long>(packet.voltage_mV),
+                  packet.wheel_speed_kmph_x100 / 100.0f);
   } else {
     Serial.printf("C3 ESP-NOW send failed seq=%lu error=%d\n",
                   static_cast<unsigned long>(packet.sequence),
