@@ -5,7 +5,7 @@
 // Packet v1 mirror used by the standalone relay sketch. Keep this definition
 // byte-for-byte compatible with telem-v1/live_telemetry_packet.h.
 static const uint32_t LIVE_TELEMETRY_MAGIC = 0x5554534DUL;  // "UTSM"
-static const uint8_t LIVE_TELEMETRY_VERSION = 1;
+static const uint8_t LIVE_TELEMETRY_VERSION = 2;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_VALID = 0x01;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE = 0x02;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_TIME_VALID = 0x04;
@@ -30,9 +30,11 @@ struct LiveTelemetryPacket
   uint16_t amag_x100;
   int32_t latitude_e7;
   int32_t longitude_e7;
+  uint32_t gps_uart_baud;
+  uint32_t gps_uart_bytes;
 } __attribute__((packed));
 
-static_assert(sizeof(LiveTelemetryPacket) == 42, "Live telemetry packet layout changed");
+static_assert(sizeof(LiveTelemetryPacket) == 50, "Live telemetry packet layout changed");
 static_assert(sizeof(LiveTelemetryPacket) <= 250, "ESP-NOW packet is too large");
 
 inline bool isValidLiveTelemetryPacket(const LiveTelemetryPacket &packet)

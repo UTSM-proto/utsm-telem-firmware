@@ -14,10 +14,10 @@ static const uint8_t LIVE_TELEMETRY_BROADCAST_MAC[6] = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 };
 
-// SD retains every sample. LTE receives a best-effort update every 5 seconds
-// to conserve the vehicle SIM's 500 MB allowance. There is no persistent
-// buffering, so a relay/network outage cannot block the logger.
-static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 5000;
+// SD retains every sample. LTE receives a best-effort update every second for
+// a responsive dashboard. There is no persistent buffering, so a relay/network
+// outage cannot block the logger or replay stale records later.
+static const uint32_t LIVE_TELEMETRY_MIN_SEND_INTERVAL_MS = 1000;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 
 class LiveTelemetryEspNowSender
@@ -76,7 +76,9 @@ public:
     bool gpsRxOnGpio21,
     uint8_t gpsSatellites,
     int32_t latitudeE7,
-    int32_t longitudeE7)
+    int32_t longitudeE7,
+    uint32_t gpsUartBaud,
+    uint32_t gpsUartBytes)
   {
     if (!_ready) return false;
     if (_hasSent &&
@@ -106,6 +108,8 @@ public:
     packet.amag_x100 = amagX100;
     packet.latitude_e7 = latitudeE7;
     packet.longitude_e7 = longitudeE7;
+    packet.gps_uart_baud = gpsUartBaud;
+    packet.gps_uart_bytes = gpsUartBytes;
 
     esp_err_t result = esp_now_send(
       LIVE_TELEMETRY_BROADCAST_MAC,

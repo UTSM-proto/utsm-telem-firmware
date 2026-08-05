@@ -43,10 +43,21 @@ fix. SD remains the complete source of truth: ESP-NOW, relay, LTE, or server
 failure never stops or delays the CSV logger, and missed live records are not
 backfilled.
 
-The TelemV2 PCB routes the GPS module's TX net to C3 GPIO21 and its RX net to
-C3 GPIO20. Firmware therefore configures UART RX on GPIO21 and UART TX on
-GPIO20. This intentionally differs from the older loose-wire GPS test sketch,
-which crossed TX to GPIO20 and RX to GPIO21 externally.
+The vehicle wiring connects the GPS module's TX pin to C3 GPIO20 and its RX pin
+to C3 GPIO21. The logger only needs to receive GPS data, so it leaves UART TX
+disconnected and first listens on GPIO20 at the normal NEO-M8N rate of 9600
+baud. If it does not receive a checksum-valid NMEA sentence, it continuously
+tests GPIO21 and GPIO20 at 9600, 38400, 115200, and 4800 baud until it locks.
+The C3 serial monitor prints each attempted pin/rate and its raw byte count.
+On ESP32-C3, hardware UART0 also defaults to GPIO20/GPIO21. The firmware does
+not initialize that console unless **USB CDC On Boot** is enabled, preventing
+`Serial.begin()` and GPS UART1 from competing for the same physical pins. GPS
+probe results are available from the WROVER relay even without a C3 monitor.
+
+`raw bytes=0` for every attempt means this is an electrical path problem, not
+a satellite-fix problem: verify 3.3 V and ground at the GPS header, then check
+continuity from the module's TX pin to C3 GPIO20. Raw bytes without an NMEA
+lock indicate a non-NMEA/proprietary configuration or corrupted UART signal.
 
 For the full setup and demo sequence, see `../../lte_relay/README.md`.
 
