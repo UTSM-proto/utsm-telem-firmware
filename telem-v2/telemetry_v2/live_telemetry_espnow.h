@@ -66,6 +66,8 @@ public:
     uint32_t timestampMs,
     int16_t currentMa,
     int32_t voltageMv,
+    bool motorTemperatureValid,
+    int16_t motorTemperatureCX100,
     int16_t axX100,
     int16_t ayX100,
     int16_t azX100,
@@ -104,6 +106,10 @@ public:
     packet.timestamp_ms = timestampMs;
     packet.current_mA = currentMa;
     packet.voltage_mV = voltageMv;
+    packet.motor_temperature_valid = motorTemperatureValid ? 1 : 0;
+    packet.motor_temperature_c_x100 = motorTemperatureValid
+                                            ? motorTemperatureCX100
+                                            : 0;
     packet.ax_x100 = axX100;
     packet.ay_x100 = ayX100;
     packet.az_x100 = azX100;
