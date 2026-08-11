@@ -30,7 +30,8 @@ relay. Power both boards normally and keep them within radio range.
    because the relay must recognize the new dyno packet type.
 4. Keep the existing live-car C3 firmware running; it does not need a reflash
    for this change.
-5. Flash `dyno_joulemeter.ino` from `UTSM-proto/proto-dyno` to the second C3.
+5. Flash `dyno_joulemeter_firmware.ino` from `UTSM-proto/proto-dyno` to the
+   second C3.
 6. Open the site, click **Start dyno test**, run the dyno, then click **Stop
    test** to freeze the Wh-to-Wh efficiency result.
 

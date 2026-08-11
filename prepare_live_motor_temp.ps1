@@ -117,7 +117,7 @@ $relaySketch = Join-Path $firmwareRepo 'lte_relay\lte_relay.ino'
 $c3Sketch = Join-Path $firmwareRepo `
   'telem-v2\telemetry_v2\telemetry_v2.ino'
 $dynoSketch = Join-Path $dynoRepo `
-  'dyno_joulemeter_firmware\dyno_joulemeter.ino'
+  'dyno_joulemeter_firmware\dyno_joulemeter_firmware.ino'
 $relayConfig = Join-Path $firmwareRepo 'lte_relay\relay_config.h'
 $relayConfigExample = Join-Path $firmwareRepo `
   'lte_relay\relay_config.example.h'
@@ -409,7 +409,7 @@ Write-Host '1. Upload lte_relay.ino to the WROVER/A7670 FIRST.'
 Write-Host '   Board: ESP32 Dev Module; Huge APP; PSRAM Enabled.'
 Write-Host '2. Upload telemetry_v2.ino to the ESP32-C3 SECOND.'
 Write-Host '   Board: ESP32C3 Dev Module; USB CDC On Boot Enabled.'
-Write-Host '3. Upload dyno_joulemeter.ino to the dyno ESP32-C3 THIRD.'
+Write-Host '3. Upload dyno_joulemeter_firmware.ino to the dyno ESP32-C3 THIRD.'
 Write-Host '   Board: ESP32C3 Dev Module.'
 Write-Host '4. Keep the computer awake; dashboard and tunnel run hidden.'
 Write-Host '5. Open http://127.0.0.1:8000/live and click Start dyno test.'
