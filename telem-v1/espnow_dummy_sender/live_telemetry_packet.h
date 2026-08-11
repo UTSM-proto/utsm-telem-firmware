@@ -3,8 +3,12 @@
 #include <Arduino.h>
 
 static const uint32_t LIVE_TELEMETRY_MAGIC = 0x5554534DUL;
-static const uint8_t LIVE_TELEMETRY_VERSION = 1;
+static const uint8_t LIVE_TELEMETRY_VERSION = 3;
 static const uint8_t LIVE_TELEMETRY_FLAG_GPS_VALID = 0x01;
+static const uint8_t LIVE_TELEMETRY_FLAG_GPS_UART_ACTIVE = 0x02;
+static const uint8_t LIVE_TELEMETRY_FLAG_GPS_TIME_VALID = 0x04;
+static const uint8_t LIVE_TELEMETRY_FLAG_GPS_RX_GPIO21 = 0x08;
+static const uint8_t LIVE_TELEMETRY_GPS_SATS_SHIFT = 4;
 
 struct LiveTelemetryPacket
 {
@@ -23,7 +27,12 @@ struct LiveTelemetryPacket
   uint16_t amag_x100;
   int32_t latitude_e7;
   int32_t longitude_e7;
+  uint32_t gps_uart_baud;
+  uint32_t gps_uart_bytes;
+  uint16_t wheel_speed_kmph_x100;
+  uint8_t wheel_speed_valid;
+  uint8_t reserved;
 } __attribute__((packed));
 
-static_assert(sizeof(LiveTelemetryPacket) == 42,
+static_assert(sizeof(LiveTelemetryPacket) == 54,
               "Live telemetry packet layout changed");
