@@ -4,16 +4,64 @@ This sketch receives the existing telemetry record over ESP-NOW and posts it
 to the software dashboard over LTE. SD logging on the ESP32-C3 remains the
 complete source of truth; this relay intentionally has no persistent buffer.
 
+The same WROVER also accepts the dyno joulemeter C3's distinct ESP-NOW packet
+on channel 1. It maintains one newest-packet slot per source and alternates
+between ready car and dyno data, so a slow LTE POST cannot make one sender
+overwrite the other sender's newest measurement.
+
 ## Hardware
 
 - LILYGO T-A7670E/G/SA ESP32-WROVER-E board
 - ESP32-C3 SuperMini on the TelemV2 telemetry board
+- second ESP32-C3 SuperMini running the dyno joulemeter firmware
 - LTE main antenna attached before powering the modem
 - Activated nano-SIM with data service
 - Stable USB/5 V supply capable of modem current peaks (use at least 2 A)
 
 The ESP-NOW hop is wireless. Do not connect UART wires between the logger and
 relay. Power both boards normally and keep them within radio range.
+
+### Dyno integration flash order
+
+1. Deploy the matching telemetry dashboard change.
+2. Copy `relay_config.example.h` to the ignored `relay_config.h`, keep the
+   existing API key private, and set the dashboard `/api/live/telemetry` URL.
+3. Flash `lte_relay.ino` to the WROVER/A7670 first. This reflash is required
+   because the relay must recognize the new dyno packet type.
+4. Keep the existing live-car C3 firmware running; it does not need a reflash
+   for this change.
+5. Flash `dyno_joulemeter_firmware.ino` from `UTSM-proto/proto-dyno` to the
+   second C3.
+6. Open the site, click **Start dyno test**, run the dyno, then click **Stop
+   test** to freeze the Wh-to-Wh efficiency result.
+
+Expected relay lines while both sources are active:
+
+```text
+Dashboard POST status=202
+LIVE seq=12 delivered in ... ms json=... B
+DYNO seq=18 delivered in ... ms P=84.215 W json=... B
+```
+
+Successful compilation does not validate ESP-NOW range, sensor calibration,
+LTE timing, or simultaneous delivery on physical hardware.
+
+The root preparation script now includes the dyno checkout and opens all three
+Arduino sketches while retaining the existing dashboard, API-key, and
+Cloudflare-tunnel setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1
+```
+
+When testing from alternate Git worktrees, pass their paths without moving or
+stashing another checkout's changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1 `
+  -SoftwareRepoPath "C:\path\to\telemetry-site-worktree" `
+  -DynoRepoPath "C:\path\to\proto-dyno-worktree"
+```
 
 ### Verified bench configuration
 
