@@ -48,6 +48,7 @@ portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 
 uint32_t lastNetworkAttemptMs = 0;
 bool networkReady = false;
+bool httpServiceReady = false;
 
 void enqueuePacket(const uint8_t *data, int length)
 {
@@ -178,6 +179,7 @@ bool powerOnModem()
 
 bool connectLte()
 {
+  httpServiceReady = false;
   Serial.println("Initializing A7670X...");
   if (!probeModemAt(3000)) {
     Serial.println("A7670X is not answering AT commands");
@@ -246,43 +248,69 @@ int parseHttpStatus(const String &actionLine)
   return status.toInt();
 }
 
-bool postJson(const String &json)
+void stopHttpService()
 {
-  // Clear a stale service from a previous failed request.
   atCommand("+HTTPTERM", 2000);
-  if (!atCommand("+HTTPINIT")) return false;
+  httpServiceReady = false;
+}
+
+bool startHttpService()
+{
+  if (httpServiceReady) return true;
+
+  // HTTPINIT can fail when a prior request left the modem service open. Only
+  // pay the HTTPTERM recovery cost when initialization actually needs it.
+  if (!atCommand("+HTTPINIT")) {
+    atCommand("+HTTPTERM", 2000);
+    if (!atCommand("+HTTPINIT")) return false;
+  }
   // A7670X selects HTTP versus HTTPS from the URL. HTTPSSL and the
   // HTTPPARA="CID" form are SIM7600-specific and return ERROR here.
-  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) return false;
-  if (!atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"")) return false;
+  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) {
+    stopHttpService();
+    return false;
+  }
+  if (!atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"")) {
+    stopHttpService();
+    return false;
+  }
   if (!atCommand(String("+HTTPPARA=\"USERDATA\",\"X-Telemetry-Key: ") +
-                 TELEMETRY_API_KEY + "\"")) return false;
+                 TELEMETRY_API_KEY + "\"")) {
+    stopHttpService();
+    return false;
+  }
+  httpServiceReady = true;
+  return true;
+}
+
+bool postJson(const String &json)
+{
+  if (!startHttpService()) return false;
 
   modem.sendAT("+HTTPDATA=", json.length(), ",10000");
   if (modem.waitResponse(10000L, GF("DOWNLOAD"), GF("ERROR")) != 1) {
-    atCommand("+HTTPTERM", 2000);
+    stopHttpService();
     return false;
   }
   SerialAT.print(json);
   if (modem.waitResponse(10000L) != 1) {
-    atCommand("+HTTPTERM", 2000);
+    stopHttpService();
     return false;
   }
 
   modem.sendAT("+HTTPACTION=1");
   if (modem.waitResponse(10000L) != 1) {
-    atCommand("+HTTPTERM", 2000);
+    stopHttpService();
     return false;
   }
 
   String prefix;
   if (modem.waitResponse(65000L, prefix, GF("+HTTPACTION:"), GF("ERROR")) != 1) {
-    atCommand("+HTTPTERM", 2000);
+    stopHttpService();
     return false;
   }
   String actionLine = SerialAT.readStringUntil('\n');
   int status = parseHttpStatus(actionLine);
-  atCommand("+HTTPTERM", 2000);
 
   Serial.printf("Dashboard POST status=%d\n", status);
   return status >= 200 && status < 300;
