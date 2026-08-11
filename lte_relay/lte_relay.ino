@@ -261,7 +261,7 @@ bool postJson(const String &json)
 String packetToJson(const LiveTelemetryPacket &packet)
 {
   String json;
-  json.reserve(360);
+  json.reserve(420);
   json += "{\"device_id\":\"";
   json += TELEMETRY_DEVICE_ID;
   json += "\",\"source_boot_id\":";
@@ -274,6 +274,14 @@ String packetToJson(const LiveTelemetryPacket &packet)
   json += packet.current_mA;
   json += ",\"voltage_mV\":";
   json += packet.voltage_mV;
+  json += ",\"motor_temperature_valid\":";
+  json += packet.motor_temperature_valid ? "true" : "false";
+  json += ",\"motor_temperature_C\":";
+  if (packet.motor_temperature_valid) {
+    json += String(packet.motor_temperature_c_x100 / 100.0f, 2);
+  } else {
+    json += "null";
+  }
   json += ",\"ax_x100\":";
   json += packet.ax_x100;
   json += ",\"ay_x100\":";
@@ -342,6 +350,9 @@ LiveTelemetryPacket makeDummyPacket()
   packet.timestamp_ms = millis();
   packet.current_mA = static_cast<int16_t>(7000.0f + 2500.0f * sinf(phase));
   packet.voltage_mV = 24000 - packet.current_mA / 20;
+  packet.motor_temperature_valid = 1;
+  packet.motor_temperature_c_x100 =
+    static_cast<int16_t>(4200.0f + 800.0f * sinf(phase * 0.25f));
   packet.ax_x100 = static_cast<int16_t>(80.0f * sinf(phase * 1.7f));
   packet.ay_x100 = static_cast<int16_t>(55.0f * cosf(phase * 1.3f));
   packet.az_x100 = 981;

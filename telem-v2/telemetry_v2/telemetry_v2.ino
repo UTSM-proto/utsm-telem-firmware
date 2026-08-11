@@ -1662,6 +1662,8 @@ void loop()
     rec.timestamp_ms,
     rec.current_mA,
     rec.voltage_mV,
+    rec.temperature_valid != 0,
+    rec.temperature_c_x100,
     rec.accel_x_mps2_x100,
     rec.accel_y_mps2_x100,
     rec.accel_z_mps2_x100,

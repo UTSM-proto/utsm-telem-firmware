@@ -187,6 +187,20 @@ Both boards are explicitly pinned to ESP-NOW channel 1 for this demo.
 This is the real end-to-end path:
 `TelemV2 -> ESP-NOW -> WROVER/A7670 -> LTE -> HTTPS -> live dashboard`.
 
+On the UTSM Windows workstation, the root-level preparation script automates
+the local setup: Arduino dependencies, LilyGO's A7670-compatible TinyGSM fork,
+dashboard startup, Cloudflare quick tunnel, ignored relay endpoint update, and
+opening both Arduino sketches. Run it from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1
+```
+
+After it reports `PREPARATION COMPLETE`, the only manual operations are the two
+Arduino IDE uploads: flash `lte_relay.ino` to the WROVER/A7670 first, then flash
+`telemetry_v2.ino` to the ESP32-C3. The script never prints the telemetry API
+key. Re-running it reuses a healthy tunnel and existing configured credentials.
+
 1. Start the dashboard with `UTSM_TELEMETRY_API_KEY` set and open `/live`.
 2. Start a Cloudflare quick tunnel and copy its current HTTPS hostname.
 3. In the ignored `relay_config.h`, set `TELEMETRY_ENDPOINT` to that hostname

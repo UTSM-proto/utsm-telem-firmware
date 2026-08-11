@@ -37,13 +37,32 @@ each packet and immediately posts it over LTE to the existing live dashboard.
 The reduced rate conserves the vehicle SIM's 500 MB data allowance. No UART
 wires are required between the boards.
 
-The live packet contains current, voltage, acceleration, beam-break wheel
-speed, and valid GPS latitude/longitude. Wheel speed includes an explicit
-validity flag, so the dashboard can distinguish a valid stopped-wheel `0.00`
-from a sensor that has not produced a usable interval yet. The dashboard map
-begins tracking as soon as the GPS has a fix. SD remains the complete source
-of truth: ESP-NOW, relay, LTE, or server failure never stops or delays the CSV
-logger, and missed live records are not backfilled.
+The live packet contains current, voltage, motor temperature, acceleration,
+beam-break wheel speed, and valid GPS latitude/longitude. Motor temperature and
+wheel speed each include an explicit validity flag, so the dashboard can
+distinguish a real zero from an unavailable sensor. The dashboard map begins
+tracking as soon as the GPS has a fix. SD remains the complete source of truth:
+ESP-NOW, relay, LTE, or server failure never stops or delays the CSV logger, and
+missed live records are not backfilled.
+
+### SD-to-live field audit
+
+This table compares every SD CSV field with packet version 4. "Relay only"
+means the diagnostic crosses ESP-NOW but is not included in the dashboard HTTP
+payload.
+
+| SD CSV field | ESP-NOW / dashboard status |
+| --- | --- |
+| `timestamp_ms`, `current_mA`, `voltage_mV` | Live |
+| `temperature_C`, `temperature_valid` | Live as `motor_temperature_C` and `motor_temperature_valid` |
+| `wheel_speed_valid`, `wheel_speed_kmph` | Live |
+| `wheel_rpm`, `wheel_spoke_count` | SD only |
+| `ax_x100`, `ay_x100`, `az_x100`, `amag_x100` | Live |
+| `gps_location_valid`, `gps_lat`, `gps_long` | Live when location is valid |
+| `gps_alt_m`, `gps_speed_kmph`, `gps_hdop` | SD only |
+| `gps_sats` | Relay only; encoded in four bits and capped at 15 |
+| `gps_time_valid` | Relay only |
+| `gps_time_utc`, `gps_centisecond` | SD only |
 
 The vehicle wiring connects the GPS module's TX pin to C3 GPIO20 and its RX pin
 to C3 GPIO21. The logger only needs to receive GPS data, so it leaves UART TX
