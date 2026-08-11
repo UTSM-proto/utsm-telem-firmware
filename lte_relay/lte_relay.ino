@@ -1,4 +1,4 @@
-#define TINY_GSM_MODEM_A7670
+#define TINY_GSM_MODEM_A7672X
 #define TINY_GSM_RX_BUFFER 1024
 
 #include <Arduino.h>
@@ -9,6 +9,7 @@
 #include <TinyGsmClient.h>
 
 #include "live_telemetry_packet.h"
+#include "dyno_telemetry_packet.h"
 
 #if __has_include("relay_config.h")
 #include "relay_config.h"
@@ -37,9 +38,12 @@ TinyGsm modem(SerialAT);
 // A live dashboard values freshness over delivery of old rows. Keep only the
 // newest packet while an LTE POST is in progress; a newer arrival supersedes
 // the pending one instead of waiting behind it in a FIFO.
-LiveTelemetryPacket latestPacket;
-volatile bool latestPacketAvailable = false;
-volatile uint32_t supersededPackets = 0;
+LiveTelemetryPacket latestCarPacket;
+DynoTelemetryPacket latestDynoPacket;
+volatile bool latestCarPacketAvailable = false;
+volatile bool latestDynoPacketAvailable = false;
+volatile uint32_t supersededCarPackets = 0;
+volatile uint32_t supersededDynoPackets = 0;
 portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 
 uint32_t lastNetworkAttemptMs = 0;
@@ -47,17 +51,30 @@ bool networkReady = false;
 
 void enqueuePacket(const uint8_t *data, int length)
 {
-  if (length != sizeof(LiveTelemetryPacket)) return;
+  if (length == sizeof(LiveTelemetryPacket)) {
+    LiveTelemetryPacket packet;
+    memcpy(&packet, data, sizeof(packet));
+    if (!isValidLiveTelemetryPacket(packet)) return;
 
-  LiveTelemetryPacket packet;
-  memcpy(&packet, data, sizeof(packet));
-  if (!isValidLiveTelemetryPacket(packet)) return;
+    portENTER_CRITICAL(&rxMux);
+    if (latestCarPacketAvailable) supersededCarPackets++;
+    latestCarPacket = packet;
+    latestCarPacketAvailable = true;
+    portEXIT_CRITICAL(&rxMux);
+    return;
+  }
 
-  portENTER_CRITICAL(&rxMux);
-  if (latestPacketAvailable) supersededPackets++;
-  latestPacket = packet;
-  latestPacketAvailable = true;
-  portEXIT_CRITICAL(&rxMux);
+  if (length == sizeof(DynoTelemetryPacket)) {
+    DynoTelemetryPacket packet;
+    memcpy(&packet, data, sizeof(packet));
+    if (!isValidDynoTelemetryPacket(packet)) return;
+
+    portENTER_CRITICAL(&rxMux);
+    if (latestDynoPacketAvailable) supersededDynoPackets++;
+    latestDynoPacket = packet;
+    latestDynoPacketAvailable = true;
+    portEXIT_CRITICAL(&rxMux);
+  }
 }
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -72,13 +89,26 @@ void onEspNowReceive(const uint8_t *, const uint8_t *data, int length)
 }
 #endif
 
-bool dequeuePacket(LiveTelemetryPacket &packet)
+bool dequeueCarPacket(LiveTelemetryPacket &packet)
 {
   bool available = false;
   portENTER_CRITICAL(&rxMux);
-  if (latestPacketAvailable) {
-    packet = latestPacket;
-    latestPacketAvailable = false;
+  if (latestCarPacketAvailable) {
+    packet = latestCarPacket;
+    latestCarPacketAvailable = false;
+    available = true;
+  }
+  portEXIT_CRITICAL(&rxMux);
+  return available;
+}
+
+bool dequeueDynoPacket(DynoTelemetryPacket &packet)
+{
+  bool available = false;
+  portENTER_CRITICAL(&rxMux);
+  if (latestDynoPacketAvailable) {
+    packet = latestDynoPacket;
+    latestDynoPacketAvailable = false;
     available = true;
   }
   portEXIT_CRITICAL(&rxMux);
@@ -264,7 +294,7 @@ String packetToJson(const LiveTelemetryPacket &packet)
   json.reserve(420);
   json += "{\"device_id\":\"";
   json += TELEMETRY_DEVICE_ID;
-  json += "\",\"source_boot_id\":";
+  json += "\",\"source_type\":\"car\",\"source_boot_id\":";
   json += packet.boot_id;
   json += ",\"sequence\":";
   json += packet.sequence;
@@ -305,6 +335,33 @@ String packetToJson(const LiveTelemetryPacket &packet)
     json += ",\"longitude\":";
     json += String(packet.longitude_e7 / 10000000.0, 7);
   }
+  json += "}";
+  return json;
+}
+
+String dynoPacketToJson(const DynoTelemetryPacket &packet)
+{
+  String json;
+  json.reserve(320);
+  json += "{\"device_id\":\"";
+  json += TELEMETRY_DEVICE_ID;
+  json += "-dyno\",\"source_type\":\"dyno\",\"source_boot_id\":";
+  json += packet.boot_id;
+  json += ",\"sequence\":";
+  json += packet.sequence;
+  json += ",\"timestamp_ms\":";
+  json += packet.timestamp_ms;
+  json += ",\"current_mA\":";
+  json += packet.current_mA;
+  json += ",\"voltage_mV\":";
+  json += packet.voltage_mV;
+  json += ",\"ax_x100\":0,\"ay_x100\":0,\"az_x100\":0,\"amag_x100\":0";
+  json += ",\"reported_power_W\":";
+  json += String(packet.power_mW / 1000.0, 3);
+  json += ",\"source_energy_Wh\":";
+  json += String(packet.energy_mJ / 3600000.0, 6);
+  json += ",\"dyno_state\":";
+  json += packet.state;
   json += "}";
   return json;
 }
@@ -392,6 +449,27 @@ bool sendLivePacket(const LiveTelemetryPacket &packet, const char *sourceLabel)
   return false;
 }
 
+bool sendDynoPacket(const DynoTelemetryPacket &packet)
+{
+  String json = dynoPacketToJson(packet);
+  uint32_t postStartedMs = millis();
+  if (postJson(json)) {
+    Serial.printf("DYNO seq=%lu delivered in %lu ms P=%.3f W json=%u B\n",
+                  static_cast<unsigned long>(packet.sequence),
+                  static_cast<unsigned long>(millis() - postStartedMs),
+                  packet.power_mW / 1000.0f,
+                  static_cast<unsigned int>(json.length()));
+    return true;
+  }
+
+  Serial.printf("DYNO seq=%lu POST failed after %lu ms json=%u B\n",
+                static_cast<unsigned long>(packet.sequence),
+                static_cast<unsigned long>(millis() - postStartedMs),
+                static_cast<unsigned int>(json.length()));
+  networkReady = false;
+  return false;
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -440,26 +518,47 @@ void loop()
     return;
   }
 
-  LiveTelemetryPacket packet;
-  if (!dequeuePacket(packet)) {
+  static bool preferDyno = false;
+  LiveTelemetryPacket carPacket;
+  DynoTelemetryPacket dynoPacket;
+  bool haveCar = false;
+  bool haveDyno = false;
+  if (preferDyno) haveDyno = dequeueDynoPacket(dynoPacket);
+  if (!haveDyno) haveCar = dequeueCarPacket(carPacket);
+  if (!haveDyno && !haveCar) haveDyno = dequeueDynoPacket(dynoPacket);
+  if (!haveCar && !haveDyno) {
     delay(5);
     return;
   }
 
-  printGpsPacketStatus(packet);
-
   if (!networkReady) {
-    Serial.printf("Dropping live seq=%lu while LTE is offline\n",
-                  static_cast<unsigned long>(packet.sequence));
+    if (haveDyno) {
+      Serial.printf("Dropping dyno seq=%lu while LTE is offline\n",
+                    static_cast<unsigned long>(dynoPacket.sequence));
+    } else {
+      Serial.printf("Dropping live seq=%lu while LTE is offline\n",
+                    static_cast<unsigned long>(carPacket.sequence));
+    }
     return;
   }
 
-  sendLivePacket(packet, "LIVE");
+  if (haveDyno) {
+    sendDynoPacket(dynoPacket);
+    preferDyno = false;
+  } else {
+    printGpsPacketStatus(carPacket);
+    sendLivePacket(carPacket, "LIVE");
+    preferDyno = true;
+  }
 
-  static uint32_t lastSupersededReport = 0;
-  if (supersededPackets != lastSupersededReport) {
-    lastSupersededReport = supersededPackets;
-    Serial.printf("ESP-NOW pending packets superseded=%lu\n",
-                  static_cast<unsigned long>(lastSupersededReport));
+  static uint32_t lastCarSupersededReport = 0;
+  static uint32_t lastDynoSupersededReport = 0;
+  if (supersededCarPackets != lastCarSupersededReport ||
+      supersededDynoPackets != lastDynoSupersededReport) {
+    lastCarSupersededReport = supersededCarPackets;
+    lastDynoSupersededReport = supersededDynoPackets;
+    Serial.printf("ESP-NOW superseded car=%lu dyno=%lu\n",
+                  static_cast<unsigned long>(lastCarSupersededReport),
+                  static_cast<unsigned long>(lastDynoSupersededReport));
   }
 }
