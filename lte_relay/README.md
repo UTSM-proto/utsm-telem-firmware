@@ -45,6 +45,23 @@ DYNO seq=18 delivered in ... ms P=84.215 W json=... B
 Successful compilation does not validate ESP-NOW range, sensor calibration,
 LTE timing, or simultaneous delivery on physical hardware.
 
+The root preparation script now includes the dyno checkout and opens all three
+Arduino sketches while retaining the existing dashboard, API-key, and
+Cloudflare-tunnel setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1
+```
+
+When testing from alternate Git worktrees, pass their paths without moving or
+stashing another checkout's changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1 `
+  -SoftwareRepoPath "C:\path\to\telemetry-site-worktree" `
+  -DynoRepoPath "C:\path\to\proto-dyno-worktree"
+```
+
 ### Verified bench configuration
 
 The complete path was bench-tested with:

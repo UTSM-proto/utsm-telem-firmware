@@ -1,4 +1,4 @@
-#define TINY_GSM_MODEM_A7672X
+#define TINY_GSM_MODEM_A7670
 #define TINY_GSM_RX_BUFFER 1024
 
 #include <Arduino.h>

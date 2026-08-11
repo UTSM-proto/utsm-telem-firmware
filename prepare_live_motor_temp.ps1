@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
   [switch]$NoLaunchIde,
-  [switch]$ForceNewTunnel
+  [switch]$ForceNewTunnel,
+  [string]$SoftwareRepoPath = '',
+  [string]$DynoRepoPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,18 +98,34 @@ function New-LocalApiKey {
 }
 
 $firmwareRepo = $PSScriptRoot
-$utsmRoot = [IO.Path]::GetFullPath((Join-Path $firmwareRepo '..\..\..'))
-$softwareRepo = Join-Path $utsmRoot `
-  '04_Telemetry-and-Track\Telemetry\utsm-proto-telemetry-host'
+$defaultUtsmRoot = [IO.Path]::GetFullPath((Join-Path $firmwareRepo '..\..\..'))
+if ($SoftwareRepoPath) {
+  $softwareRepo = [IO.Path]::GetFullPath($SoftwareRepoPath)
+  $utsmRoot = [IO.Path]::GetFullPath((Join-Path $softwareRepo '..\..\..'))
+} else {
+  $utsmRoot = $defaultUtsmRoot
+  $softwareRepo = Join-Path $utsmRoot `
+    '04_Telemetry-and-Track\Telemetry\utsm-proto-telemetry-host'
+}
+if ($DynoRepoPath) {
+  $dynoRepo = [IO.Path]::GetFullPath($DynoRepoPath)
+} else {
+  $dynoRepo = Join-Path $utsmRoot `
+    '05_Firmware-and-Experiments\proto-dyno'
+}
 $relaySketch = Join-Path $firmwareRepo 'lte_relay\lte_relay.ino'
 $c3Sketch = Join-Path $firmwareRepo `
   'telem-v2\telemetry_v2\telemetry_v2.ino'
+$dynoSketch = Join-Path $dynoRepo `
+  'dyno_joulemeter_firmware\dyno_joulemeter.ino'
 $relayConfig = Join-Path $firmwareRepo 'lte_relay\relay_config.h'
 $relayConfigExample = Join-Path $firmwareRepo `
   'lte_relay\relay_config.example.h'
 $stateDirectory = Join-Path $utsmRoot '.utsm-live'
 
-foreach ($requiredPath in @($softwareRepo, $relaySketch, $c3Sketch)) {
+foreach ($requiredPath in @(
+    $softwareRepo, $relaySketch, $c3Sketch, $dynoSketch
+  )) {
   if (-not (Test-Path -LiteralPath $requiredPath)) {
     throw "Required UTSM path not found: $requiredPath"
   }
@@ -133,6 +151,13 @@ if ($packetHeader -notmatch 'LIVE_TELEMETRY_VERSION\s*=\s*4' -or
   throw 'This checkout does not contain the packet-v4 motor-temperature change.'
 }
 
+$dynoPacketHeader = Get-Content (Join-Path $dynoRepo `
+  'dyno_joulemeter_firmware\dyno_telemetry_packet.h') -Raw
+if ($dynoPacketHeader -notmatch 'DYNO_TELEMETRY_VERSION\s*=\s*1' -or
+    $dynoPacketHeader -notmatch 'DYNO_TELEMETRY_MAGIC') {
+  throw 'The dyno checkout does not contain the wireless telemetry change.'
+}
+
 Write-Step 'Installing the Arduino ESP32 platform and sensor library'
 $coreList = (& $arduinoCli core list 2>&1 | Out-String)
 if ($coreList -notmatch '(?m)^esp32:esp32\s+3\.3\.11\s') {
@@ -147,6 +172,14 @@ if ($libraryList -notmatch '(?im)^TinyGPSPlus\s') {
   & $arduinoCli lib install TinyGPSPlus
   if ($LASTEXITCODE -ne 0) {
     throw 'Failed to install TinyGPSPlus.'
+  }
+}
+foreach ($library in @('Adafruit SSD1306', 'Adafruit ADS1X15')) {
+  if ($libraryList -notmatch ('(?im)^' + [regex]::Escape($library) + '\s')) {
+    & $arduinoCli lib install $library
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to install $library."
+    }
   }
 }
 
@@ -362,10 +395,12 @@ $utf8NoBom = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($relayConfig, $configText, $utf8NoBom)
 
 if (-not $NoLaunchIde) {
-  Write-Step 'Opening both Arduino sketches'
+  Write-Step 'Opening the WROVER, car C3, and dyno C3 Arduino sketches'
+  Start-Process -FilePath $arduinoIde -ArgumentList @("`"$relaySketch`"")
+  Start-Sleep -Seconds 2
   Start-Process -FilePath $arduinoIde -ArgumentList @("`"$c3Sketch`"")
   Start-Sleep -Seconds 2
-  Start-Process -FilePath $arduinoIde -ArgumentList @("`"$relaySketch`"")
+  Start-Process -FilePath $arduinoIde -ArgumentList @("`"$dynoSketch`"")
 }
 
 Write-Host ''
@@ -374,6 +409,8 @@ Write-Host '1. Upload lte_relay.ino to the WROVER/A7670 FIRST.'
 Write-Host '   Board: ESP32 Dev Module; Huge APP; PSRAM Enabled.'
 Write-Host '2. Upload telemetry_v2.ino to the ESP32-C3 SECOND.'
 Write-Host '   Board: ESP32C3 Dev Module; USB CDC On Boot Enabled.'
-Write-Host '3. Keep the computer awake; dashboard and tunnel run hidden.'
-Write-Host '4. Open http://127.0.0.1:8000/live to watch motor temperature.'
+Write-Host '3. Upload dyno_joulemeter.ino to the dyno ESP32-C3 THIRD.'
+Write-Host '   Board: ESP32C3 Dev Module.'
+Write-Host '4. Keep the computer awake; dashboard and tunnel run hidden.'
+Write-Host '5. Open http://127.0.0.1:8000/live and click Start dyno test.'
 Write-Host 'The telemetry API key was not printed.'
