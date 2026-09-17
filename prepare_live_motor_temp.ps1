@@ -34,7 +34,33 @@ function Test-Health([string]$Url, [int]$TimeoutSec = 5) {
     $response = Invoke-RestMethod -Uri $Url -TimeoutSec $TimeoutSec
     return [bool]$response.ok
   } catch {
-    return $false
+    # Some workstation DNS/VPN configurations cache NXDOMAIN for brand-new
+    # quick-tunnel names even though Cloudflare's public resolver already has
+    # the record. Validate through public DNS without changing system DNS.
+    try {
+      $uri = [Uri]$Url
+      if ($uri.Scheme -ne 'https' -or
+          $uri.DnsSafeHost -notmatch '\.trycloudflare\.com$') {
+        return $false
+      }
+      $address = Resolve-DnsName $uri.DnsSafeHost -Server '1.1.1.1' `
+        -Type A -DnsOnly -ErrorAction Stop |
+        Where-Object { $_.IPAddress } |
+        Select-Object -ExpandProperty IPAddress -First 1
+      if (-not $address) {
+        return $false
+      }
+      $resolve = "{0}:443:{1}" -f $uri.DnsSafeHost, $address
+      $body = & curl.exe --silent --show-error --max-time $TimeoutSec `
+        --resolve $resolve $Url 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        return $false
+      }
+      $response = $body | ConvertFrom-Json
+      return [bool]$response.ok
+    } catch {
+      return $false
+    }
   }
 }
 
@@ -323,6 +349,25 @@ if (-not $ForceNewTunnel -and $currentEndpoint -match
   $publicBaseUrl = $currentEndpoint -replace '/api/live/telemetry$', ''
   Write-Host 'Existing public tunnel is healthy.'
 } else {
+  $trackedTunnelPidFile = Join-Path $stateDirectory 'tunnel.pid'
+  if (Test-Path -LiteralPath $trackedTunnelPidFile) {
+    $trackedTunnelPid = 0
+    if ([int]::TryParse(
+        (Get-Content -LiteralPath $trackedTunnelPidFile -Raw).Trim(),
+        [ref]$trackedTunnelPid)) {
+      $trackedTunnel = Get-Process -Id $trackedTunnelPid `
+        -ErrorAction SilentlyContinue
+      if ($trackedTunnel -and
+          $trackedTunnel.ProcessName -eq 'cloudflared' -and
+          $trackedTunnel.Path -eq $cloudflared) {
+        Write-Host "Stopping stale tracked tunnel process $trackedTunnelPid."
+        Stop-Process -Id $trackedTunnelPid
+        $trackedTunnel.WaitForExit(5000) | Out-Null
+      }
+    }
+    Remove-Item -LiteralPath $trackedTunnelPidFile -Force
+  }
+
   $lastTunnelErrorLog = $null
   for ($tunnelTry = 1; $tunnelTry -le 3 -and -not $publicBaseUrl;
       $tunnelTry++) {
@@ -356,7 +401,10 @@ if (-not $ForceNewTunnel -and $currentEndpoint -match
     }
 
     if ($candidateBaseUrl) {
-      for ($attempt = 0; $attempt -lt 20; $attempt++) {
+      # A newly issued quick-tunnel hostname can take longer than 20 seconds
+      # to propagate even after cloudflared reports a registered connection.
+      # Never write or flash that hostname until its public health check works.
+      for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if (Test-Health "$candidateBaseUrl/health" 5) {
           $publicBaseUrl = $candidateBaseUrl
           break

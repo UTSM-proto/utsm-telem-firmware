@@ -199,6 +199,10 @@ static const float ADC_DIVIDER_RATIO   = 1.0f;
 static const float ADC_ZERO_CURRENT_V  = 2.55f;
 static const float ADC_SENSITIVITY     = 0.066f;
 static const float VOLTAGE_INPUT_SCALE = 5.93f;
+// Bench fit: I_actual = 0.7949 * I_measured - 0.70904 A.
+// Startup zeroing is performed after this fit so resting current remains 0 A.
+static const float CURRENT_CAL_SLOPE     = 0.7949f;
+static const float CURRENT_CAL_INTERCEPT = -0.70904f;
 
 static const uint32_t CURRENT_ZERO_CAL_DELAY_MS = 15000;
 static const uint32_t CURRENT_ZERO_CAL_TIME_MS  = 3000;
@@ -785,7 +789,9 @@ bool adc16ReadCurrent(float &currentA, int16_t &rawOut)
   float adcVoltage = (float)raw * ADS1115_LSB_VOLTS;
   float sensorVoltage = adcVoltage / ADC_DIVIDER_RATIO;
 
-  currentA = (sensorVoltage - ADC_ZERO_CURRENT_V) / ADC_SENSITIVITY;
+  float measuredCurrentA =
+    (sensorVoltage - ADC_ZERO_CURRENT_V) / ADC_SENSITIVITY;
+  currentA = CURRENT_CAL_SLOPE * measuredCurrentA + CURRENT_CAL_INTERCEPT;
   rawOut = raw;
   return true;
 }

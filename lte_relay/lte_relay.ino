@@ -188,16 +188,44 @@ bool connectLte()
     return false;
   }
 
-  if (SIM_PIN[0] != '\0' && modem.getSimStatus() != 3) {
+  if (SIM_PIN[0] != '\0' && modem.getSimStatus() != SIM_READY) {
     if (!modem.simUnlock(SIM_PIN)) {
       Serial.println("SIM unlock failed");
       return false;
     }
   }
 
+  // Configure the PDP context before LTE registration. A modem that stays
+  // powered while SIMs are swapped can otherwise attempt EPS attach using the
+  // previous carrier's saved APN and never reach gprsConnect().
+  Serial.printf("Configuring pre-attach APN '%s'...\n", LTE_APN);
+  if (!modem.setNetworkAPN(LTE_APN)) {
+    Serial.println("Pre-attach APN configuration failed");
+    return false;
+  }
+
+  Serial.println("Selecting automatic cellular network mode...");
+  if (!modem.setNetworkMode(MODEM_NETWORK_AUTO)) {
+    Serial.println("Automatic cellular network mode failed");
+    return false;
+  }
+
+  // Clear any manual carrier selection retained from the previous SIM.
+  modem.sendAT("+COPS=0");
+  if (modem.waitResponse(120000L) != 1) {
+    Serial.println("Automatic operator selection did not confirm; continuing scan");
+  }
+
   Serial.println("Waiting for LTE registration...");
   if (!modem.waitForNetwork(60000L)) {
     Serial.println("LTE registration timed out");
+    Serial.printf("SIM status=%d, registration=%d, signal CSQ=%d, network connected=%s\n",
+                  (int)modem.getSimStatus(),
+                  (int)modem.getRegistrationStatus(),
+                  (int)modem.getSignalQuality(),
+                  modem.isNetworkConnected() ? "yes" : "no");
+    Serial.print("Operator after timeout: ");
+    Serial.println(modem.getOperator());
     return false;
   }
 
@@ -251,6 +279,15 @@ bool postJson(const String &json)
   // Clear a stale service from a previous failed request.
   atCommand("+HTTPTERM", 2000);
   if (!atCommand("+HTTPINIT")) return false;
+  const bool useTls = String(TELEMETRY_ENDPOINT).startsWith("https://");
+  if (useTls) {
+    // Cloudflare requires SNI. The A76XX SSL context defaults to SNI disabled.
+    if (!atCommand("+CSSLCFG=\"sslversion\",0,4")) return false;
+    if (!atCommand("+CSSLCFG=\"authmode\",0,0")) return false;
+    if (!atCommand("+CSSLCFG=\"ignorelocaltime\",0,1")) return false;
+    if (!atCommand("+CSSLCFG=\"enableSNI\",0,1")) return false;
+    if (!atCommand("+HTTPPARA=\"SSLCFG\",0")) return false;
+  }
   // A7670X selects HTTP versus HTTPS from the URL. HTTPSSL and the
   // HTTPPARA="CID" form are SIM7600-specific and return ERROR here.
   if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) return false;
@@ -285,6 +322,12 @@ bool postJson(const String &json)
   atCommand("+HTTPTERM", 2000);
 
   Serial.printf("Dashboard POST status=%d\n", status);
+  if (status == 715) {
+    Serial.println(
+      "TLS handshake failed. LTE registration/data are working; check the "
+      "tunnel edge's TLS compatibility with this A7670 firmware."
+    );
+  }
   return status >= 200 && status < 300;
 }
 
@@ -502,7 +545,8 @@ void loop()
   if (!networkReady) {
     if (millis() - lastNetworkAttemptMs >= LTE_RECONNECT_INTERVAL_MS) {
       lastNetworkAttemptMs = millis();
-      networkReady = connectLte();
+      bool modemReady = powerOnModem();
+      networkReady = modemReady && connectLte();
     }
   }
 
