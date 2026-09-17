@@ -1,3 +1,17 @@
+# QUICK START: LIVE TELEMETRY
+
+From the `utsm-telem-firmware` repository folder, run this one command:
+
+```powershell
+.\start_live_telem.cmd
+```
+
+The setup page opens automatically. Connect only the WROVER by USB, select its
+COM port, and click **Program WROVER and start telemetry**. The launcher handles
+the dashboard, Cloudflare tunnel, private key, firmware build, upload, and
+redirect to the live telemetry page. Running the command again automatically
+replaces the previous idle UTSM dashboard process.
+
 # T-A7670X LTE relay
 
 This sketch receives the existing telemetry record over ESP-NOW and posts it
@@ -53,6 +67,20 @@ Cloudflare-tunnel setup:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\prepare_live_motor_temp.ps1
 ```
+
+For the single-entry setup portal, run this instead:
+
+```powershell
+.\start_live_telem.cmd
+```
+
+The command opens `http://127.0.0.1:8000/setup`. Connect only the WROVER,
+select its COM port, and click **Program WROVER and start telemetry**. The page
+creates or validates the Cloudflare tunnel, writes the matching private API key
+and tunnel endpoint into the ignored relay configuration, compiles with the
+Huge APP and PSRAM settings, uploads the relay, and redirects to `/live` after
+a successful flash. The programming controls accept requests only through the
+local `localhost` page; they are not available through the public tunnel.
 
 When testing from alternate Git worktrees, pass their paths without moving or
 stashing another checkout's changes:
@@ -229,6 +257,15 @@ C3 ESP-NOW queued seq=0 I=11000 mA V=49560 mV
 ```
 
 Both boards are explicitly pinned to ESP-NOW channel 1 for this demo.
+
+### If the relay prints status 715
+
+`Dashboard POST status=715` is an A7670 TLS-handshake failure. It is not, by
+itself, evidence that the SIM is out of data. If the preceding lines show LTE
+registration, a normal CSQ value, and an assigned IP address, the packet-data
+session is up. Check whether the tunnel's current TLS certificate and cipher
+support are compatible with the modem firmware. A successful vehicle-path test
+still requires status 202, `LIVE seq=... delivered`, and a fresh dashboard row.
 
 ## Level 4: TelemV2 live vehicle demo
 
