@@ -12,6 +12,18 @@ function Write-Step([string]$Message) {
   Write-Host "`n==> $Message" -ForegroundColor Cyan
 }
 
+function Get-PermanentTunnelBaseUrl([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path)
+  $match = [regex]::Match(
+    $text,
+    '(?m)^\s*PermanentTunnelBaseUrl\s*=\s*[''\"](?<value>https://[^''\"]+)[''\"]\s*$'
+  )
+  if (-not $match.Success) {
+    throw "PermanentTunnelBaseUrl is missing or invalid in $Path"
+  }
+  return $match.Groups['value'].Value.TrimEnd('/')
+}
+
 function Find-Executable([string[]]$Names, [string[]]$FallbackPaths) {
   foreach ($name in $Names) {
     $command = Get-Command $name -ErrorAction SilentlyContinue
@@ -148,9 +160,10 @@ $relayConfig = Join-Path $firmwareRepo 'lte_relay\relay_config.h'
 $relayConfigExample = Join-Path $firmwareRepo `
   'lte_relay\relay_config.example.h'
 $stateDirectory = Join-Path $utsmRoot '.utsm-live'
+$liveConfigPath = Join-Path $firmwareRepo 'live_telem_config.psd1'
 
 foreach ($requiredPath in @(
-    $softwareRepo, $relaySketch, $c3Sketch, $dynoSketch
+    $softwareRepo, $relaySketch, $c3Sketch, $dynoSketch, $liveConfigPath
   )) {
   if (-not (Test-Path -LiteralPath $requiredPath)) {
     throw "Required UTSM path not found: $requiredPath"
@@ -342,8 +355,19 @@ $currentEndpoint = Get-CharSetting $configText 'TELEMETRY_ENDPOINT'
 $currentHealthUrl = $currentEndpoint -replace
   '/api/live/telemetry$', '/health'
 $publicBaseUrl = $null
+$permanentTunnelBaseUrl = Get-PermanentTunnelBaseUrl $liveConfigPath
 
-if (-not $ForceNewTunnel -and $currentEndpoint -match
+if ($permanentTunnelBaseUrl) {
+  if ($permanentTunnelBaseUrl -notmatch '^https://[^/]+$') {
+    throw 'PermanentTunnelBaseUrl must be an HTTPS origin without a path.'
+  }
+  $permanentHealthUrl = "$permanentTunnelBaseUrl/health"
+  if (-not (Test-Health $permanentHealthUrl 15)) {
+    throw "Permanent Cloudflare tunnel is not healthy at $permanentHealthUrl"
+  }
+  $publicBaseUrl = $permanentTunnelBaseUrl
+  Write-Host 'Permanent public tunnel is healthy; no quick tunnel is needed.'
+} elseif (-not $ForceNewTunnel -and $currentEndpoint -match
     '^https://[a-z0-9-]+\.trycloudflare\.com/api/live/telemetry$' -and
     (Test-Health $currentHealthUrl 10)) {
   $publicBaseUrl = $currentEndpoint -replace '/api/live/telemetry$', ''
@@ -377,7 +401,8 @@ if (-not $ForceNewTunnel -and $currentEndpoint -match
     $tunnelErr = Join-Path $stateDirectory "tunnel-$tunnelStamp.err.log"
     $lastTunnelErrorLog = $tunnelErr
     $tunnelProcess = Start-Process -FilePath $cloudflared -ArgumentList @(
-      'tunnel', '--url', 'http://127.0.0.1:8000', '--no-autoupdate'
+      'tunnel', '--url', 'http://127.0.0.1:8000',
+      '--protocol', 'http2', '--no-autoupdate'
     ) -WindowStyle Hidden -RedirectStandardOutput $tunnelOut `
       -RedirectStandardError $tunnelErr -PassThru
 
@@ -461,4 +486,5 @@ Write-Host '3. Upload dyno_joulemeter_firmware.ino to the dyno ESP32-C3 THIRD.'
 Write-Host '   Board: ESP32C3 Dev Module.'
 Write-Host '4. Keep the computer awake; dashboard and tunnel run hidden.'
 Write-Host '5. Open http://127.0.0.1:8000/live and click Start dyno test.'
+Write-Host "Permanent public dashboard: $publicBaseUrl/live"
 Write-Host 'The telemetry API key was not printed.'

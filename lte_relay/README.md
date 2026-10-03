@@ -8,9 +8,14 @@ From the `utsm-telem-firmware` repository folder, run this one command:
 
 The setup page opens automatically. Connect only the WROVER by USB, select its
 COM port, and click **Program WROVER and start telemetry**. The launcher handles
-the dashboard, Cloudflare tunnel, private key, firmware build, upload, and
-redirect to the live telemetry page. Running the command again automatically
-replaces the previous idle UTSM dashboard process.
+the dashboard, permanent Cloudflare route, private key, firmware build, upload,
+and redirect to the live telemetry page. Running the command again
+automatically replaces the previous idle UTSM dashboard process.
+
+The public dashboard is `https://telem.utsm.party/live`. The Cloudflared
+Windows service starts at boot with the same hostname. The dashboard also has
+an at-sign-in startup task, so restarting the computer or externally powered
+WROVER does not change the firmware endpoint and does not require reflashing.
 
 # T-A7670X LTE relay
 
@@ -97,8 +102,8 @@ The complete path was bench-tested with:
 
 - LILYGO T-A7670G R2 with `A7670G-LLSE` modem
 - A7670 firmware `A7670M7_B02V01_251111`
-- Public Mobile SIM on the TELUS LTE network
-- Public Mobile APN `sp.mb.com`, with blank username and password
+- Lucky Mobile SIM
+- Lucky Mobile APN `connect`, with blank username and password
 - ESP32-C3 SuperMini transmitting ESP-NOW broadcast packets on channel 1
 - FastAPI dashboard exposed temporarily through Cloudflare Tunnel
 
@@ -151,10 +156,10 @@ Serial Monitor.
 Copy `relay_config.example.h` to `relay_config.h`, then set the carrier APN,
 the full dashboard ingestion URL, and the same API key used by the server.
 
-Example Public Mobile configuration:
+Example Lucky Mobile configuration:
 
 ```cpp
-static const char LTE_APN[] = "sp.mb.com";
+static const char LTE_APN[] = "connect";
 static const char LTE_USER[] = "";
 static const char LTE_PASSWORD[] = "";
 static const char SIM_PIN[] = "";
@@ -188,7 +193,8 @@ cloudflared tunnel --url http://localhost:8000
 
 Put the generated HTTPS hostname plus `/api/live/telemetry` in
 `TELEMETRY_ENDPOINT`. The API key must exactly match the environment variable.
-Quick-tunnel hostnames change whenever the tunnel is restarted.
+Quick-tunnel hostnames change whenever the tunnel is restarted. The normal
+UTSM workflow now uses the permanent `telem.utsm.party` tunnel instead.
 
 ## Prototype behavior
 
