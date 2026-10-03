@@ -31,6 +31,7 @@ static const uint32_t MODEM_POWER_ON_PULSE_MS = 1000;
 static const uint32_t MODEM_START_WAIT_MS = 15000;
 static const uint8_t LIVE_TELEMETRY_ESPNOW_CHANNEL = 1;
 static const uint32_t LTE_RECONNECT_INTERVAL_MS = 30000;
+static const uint32_t RELAY_HEARTBEAT_INTERVAL_MS = 15000;
 
 HardwareSerial SerialAT(1);
 TinyGsm modem(SerialAT);
@@ -274,12 +275,12 @@ int parseHttpStatus(const String &actionLine)
   return status.toInt();
 }
 
-bool postJson(const String &json)
+bool postJsonTo(const String &endpoint, const String &json, const char *statusLabel)
 {
   // Clear a stale service from a previous failed request.
   atCommand("+HTTPTERM", 2000);
   if (!atCommand("+HTTPINIT")) return false;
-  const bool useTls = String(TELEMETRY_ENDPOINT).startsWith("https://");
+  const bool useTls = endpoint.startsWith("https://");
   if (useTls) {
     // Cloudflare requires SNI. The A76XX SSL context defaults to SNI disabled.
     if (!atCommand("+CSSLCFG=\"sslversion\",0,4")) return false;
@@ -290,7 +291,7 @@ bool postJson(const String &json)
   }
   // A7670X selects HTTP versus HTTPS from the URL. HTTPSSL and the
   // HTTPPARA="CID" form are SIM7600-specific and return ERROR here.
-  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + TELEMETRY_ENDPOINT + "\"")) return false;
+  if (!atCommand(String("+HTTPPARA=\"URL\",\"") + endpoint + "\"")) return false;
   if (!atCommand("+HTTPPARA=\"CONTENT\",\"application/json\"")) return false;
   if (!atCommand(String("+HTTPPARA=\"USERDATA\",\"X-Telemetry-Key: ") +
                  TELEMETRY_API_KEY + "\"")) return false;
@@ -321,7 +322,7 @@ bool postJson(const String &json)
   int status = parseHttpStatus(actionLine);
   atCommand("+HTTPTERM", 2000);
 
-  Serial.printf("Dashboard POST status=%d\n", status);
+  Serial.printf("%s status=%d\n", statusLabel, status);
   if (status == 715) {
     Serial.println(
       "TLS handshake failed. LTE registration/data are working; check the "
@@ -329,6 +330,47 @@ bool postJson(const String &json)
     );
   }
   return status >= 200 && status < 300;
+}
+
+bool postJson(const String &json)
+{
+  return postJsonTo(TELEMETRY_ENDPOINT, json, "Dashboard POST");
+}
+
+String relayHeartbeatEndpoint()
+{
+  String endpoint = TELEMETRY_ENDPOINT;
+  const String telemetryPath = "/api/live/telemetry";
+  if (endpoint.endsWith(telemetryPath)) {
+    endpoint.remove(endpoint.length() - telemetryPath.length());
+  }
+  endpoint += "/api/live/relay-heartbeat";
+  return endpoint;
+}
+
+bool sendRelayHeartbeat()
+{
+  String json;
+  json.reserve(180);
+  json += "{\"device_id\":\"";
+  json += TELEMETRY_DEVICE_ID;
+  json += "\",\"uptime_ms\":";
+  json += millis();
+  json += ",\"lte_ip\":\"";
+  json += modem.getLocalIP();
+  json += "\",\"signal_csq\":";
+  json += modem.getSignalQuality();
+  json += "}";
+
+  const bool delivered = postJsonTo(
+    relayHeartbeatEndpoint(), json, "Relay heartbeat"
+  );
+  if (delivered) {
+    Serial.println("Relay heartbeat delivered");
+  } else {
+    Serial.println("Relay heartbeat failed");
+  }
+  return delivered;
 }
 
 String packetToJson(const LiveTelemetryPacket &packet)
@@ -515,6 +557,12 @@ bool sendDynoPacket(const DynoTelemetryPacket &packet)
 
 void setup()
 {
+  // T-A7670X ESP32 V1.x must assert the battery/modem rail immediately on
+  // startup. Waiting until modem initialization can let battery protection
+  // remove power and trap the board in a reset loop when USB is absent.
+  pinMode(BOARD_POWERON_PIN, OUTPUT);
+  digitalWrite(BOARD_POWERON_PIN, HIGH);
+
   Serial.begin(115200);
   delay(1000);
   Serial.println("UTSM T-A7670X live telemetry relay");
@@ -550,9 +598,17 @@ void loop()
     }
   }
 
+  static uint32_t lastHeartbeatMs = 0;
+  uint32_t now = millis();
+  if (networkReady &&
+      (lastHeartbeatMs == 0 ||
+       now - lastHeartbeatMs >= RELAY_HEARTBEAT_INTERVAL_MS)) {
+    lastHeartbeatMs = now;
+    if (!sendRelayHeartbeat()) networkReady = false;
+  }
+
   if (LTE_DUMMY_TEST_MODE) {
     static uint32_t lastDummySendMs = 0;
-    uint32_t now = millis();
     if (networkReady && now - lastDummySendMs >= LTE_DUMMY_SEND_INTERVAL_MS) {
       lastDummySendMs = now;
       LiveTelemetryPacket dummy = makeDummyPacket();

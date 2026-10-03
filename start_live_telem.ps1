@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+  [switch]$Background
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -64,6 +66,27 @@ $softwareRepo = Join-Path $utsmRoot `
 $relayConfig = Join-Path $firmwareRepo 'lte_relay\relay_config.h'
 $relayConfigExample = Join-Path $firmwareRepo 'lte_relay\relay_config.example.h'
 $stateDirectory = Join-Path $utsmRoot '.utsm-live'
+$liveConfigPath = Join-Path $firmwareRepo 'live_telem_config.psd1'
+
+if (-not (Test-Path -LiteralPath $liveConfigPath)) {
+  throw "Live telemetry configuration not found: $liveConfigPath"
+}
+
+function Get-PermanentTunnelBaseUrl([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path)
+  $match = [regex]::Match(
+    $text,
+    '(?m)^\s*PermanentTunnelBaseUrl\s*=\s*[''\"](?<value>https://[^''\"]+)[''\"]\s*$'
+  )
+  if (-not $match.Success) {
+    throw "PermanentTunnelBaseUrl is missing or invalid in $Path"
+  }
+  return $match.Groups['value'].Value.TrimEnd('/')
+}
+$permanentTunnelBaseUrl = Get-PermanentTunnelBaseUrl $liveConfigPath
+if ($permanentTunnelBaseUrl -notmatch '^https://[^/]+$') {
+  throw 'PermanentTunnelBaseUrl must be an HTTPS origin without a path.'
+}
 
 if (-not (Test-Path -LiteralPath $softwareRepo)) {
   throw "Telemetry host not found: $softwareRepo"
@@ -79,6 +102,15 @@ if (-not $apiKey -or $apiKey -match 'change-me|replace|YOUR_') {
   $configText = Set-CharSetting $configText 'TELEMETRY_API_KEY' $apiKey
   $utf8NoBom = New-Object Text.UTF8Encoding($false)
   [IO.File]::WriteAllText($relayConfig, $configText, $utf8NoBom)
+}
+
+$permanentEndpoint = "$permanentTunnelBaseUrl/api/live/telemetry"
+if ((Get-CharSetting $configText 'TELEMETRY_ENDPOINT') -ne $permanentEndpoint) {
+  $configText = Set-CharSetting $configText 'TELEMETRY_ENDPOINT' `
+    $permanentEndpoint
+  $utf8NoBom = New-Object Text.UTF8Encoding($false)
+  [IO.File]::WriteAllText($relayConfig, $configText, $utf8NoBom)
+  Write-Host 'Configured the WROVER for the permanent telemetry hostname.'
 }
 
 $python = Join-Path $softwareRepo '.venv\Scripts\python.exe'
@@ -193,9 +225,41 @@ if (-not $ready) {
   throw "The setup portal failed to start. Inspect $stderrLog"
 }
 
-Start-Process 'http://127.0.0.1:8000/setup'
+$cloudflaredService = Get-Service -Name 'Cloudflared' `
+  -ErrorAction SilentlyContinue
+if (-not $cloudflaredService) {
+  throw 'The permanent Cloudflared Windows service is not installed.'
+}
+if ($cloudflaredService.Status -ne 'Running') {
+  Start-Service -Name 'Cloudflared'
+}
+
+$publicReady = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  try {
+    $health = Invoke-RestMethod -Uri "$permanentTunnelBaseUrl/health" `
+      -TimeoutSec 5
+    if ($health.ok) {
+      $publicReady = $true
+      break
+    }
+  } catch {
+    # The service or network may still be starting after sign-in.
+  }
+  Start-Sleep -Seconds 2
+}
+if (-not $publicReady) {
+  throw "Permanent tunnel is not healthy at $permanentTunnelBaseUrl/health"
+}
+
+if (-not $Background) {
+  Start-Process 'http://127.0.0.1:8000/setup'
+}
 Write-Host ''
 Write-Host 'UTSM live telemetry setup is ready.' -ForegroundColor Green
-Write-Host 'The setup page opened at http://127.0.0.1:8000/setup'
-Write-Host 'Connect only the WROVER, choose its COM port, and click Program.'
-Write-Host 'The dashboard and tunnel will keep running in the background.'
+Write-Host "Permanent public URL: $permanentTunnelBaseUrl/live"
+if (-not $Background) {
+  Write-Host 'The setup page opened at http://127.0.0.1:8000/setup'
+  Write-Host 'Connect only the WROVER, choose its COM port, and click Program.'
+}
+Write-Host 'The dashboard and permanent tunnel are running in the background.'
