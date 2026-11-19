@@ -14,21 +14,21 @@ const char* targetSensors[] = {
 };
 const int numSensors = 4;
 
-double temp_decoder(std::string payload){
+double temp_decoder(String payload){
       if (payload.length() >= 11) {
           uint8_t tempByte = (uint8_t)payload[3];
           double temperature = (double)tempByte - 40; 
-          Serial.printf("   Temperature  : ~%d °C\n", temperature);
+          Serial.printf("   Temperature : %.1f °C\n", temperature);
           return temperature;
         }
          else return -1;
 }
 
-Double pressure_decoder(string payload){
+double pressure_decoder(String payload){
       if (payload.length() >= 11) {
           uint16_t pressByte = ((uint16_t)payload[4] << 8) | payload[5];
           double pressure = (double)pressByte - 100.0; 
-          Serial.printf("   Pressure  : ~%d Kpa\n", pressure);
+          Serial.printf("   Pressure    : %.1f kPa\n", pressure);
           return pressure;
         }
          else return -1;
@@ -69,7 +69,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
           Serial.printf("%02X ", (uint8_t)payload[i]);
         }
         Serial.println();
-
+        temp_decoder(payload);
+        pressure_decoder(payload);
          }
       Serial.println("========================================");
     }
