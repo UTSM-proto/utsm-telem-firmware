@@ -17,7 +17,7 @@ const int numSensors = 4;
 double temp_decoder(String payload){
       if (payload.length() >= 11) {
           uint8_t tempByte = (uint8_t)payload[3];
-          double temperature = (double)tempByte - 40; 
+          double temperature = ((double)tempByte - 32.0) * 5.0 / 9.0; // raw data measures temp in farenheit, convert ot celsius
           Serial.printf("   Temperature : %.1f °C\n", temperature);
           return temperature;
         }
@@ -27,8 +27,8 @@ double temp_decoder(String payload){
 double pressure_decoder(String payload){
       if (payload.length() >= 11) {
           uint16_t pressByte = ((uint16_t)payload[4] << 8) | payload[5];
-          double pressure = (double)pressByte - 100.0; 
-          Serial.printf("   Pressure    : %.1f kPa\n", pressure);
+          double pressure = (double)pressByte - 101.325; 
+          Serial.printf("   Pressure    : %.1f kpa\n", pressure);
           return pressure;
         }
          else return -1;
